@@ -1,0 +1,53 @@
+[project]
+name = "population-based-training"
+version = "0.1.0"
+description = "Population-based training (a genetic algorithm) for XGBoost classifier hyperparameters"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "numpy==2.5.0",
+    "pandas==3.0.3",
+    "scikit-learn==1.9.0",
+    "xgboost==3.3.0",
+    "joblib>=1.4",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "matplotlib>=3.11.0",
+    "nbconvert>=7.17.1",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pbt_xgb"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=pbt_xgb --cov-report=term-missing --cov-report=html --cov-branch --cov-fail-under=100"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["pbt_xgb"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "N", "C4"]
