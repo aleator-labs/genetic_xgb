@@ -3,10 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pbt_xgb.search_space import (
+from genetic_xgb.search_space import (
     Hyperparameter,
     SearchSpace,
     default_classification_space,
+    default_regression_space,
 )
 
 
@@ -310,6 +311,20 @@ def test_searchspace_uses_real_fixture_rng(rng: np.random.Generator) -> None:
     sp = default_classification_space()
     params = sp.sample(rng)
     assert set(params) == CORE_NAMES
+
+
+def test_default_regression_space_core_contents() -> None:
+    sp = default_regression_space()
+    # Same tree genes as classification, but NO class-imbalance gene.
+    assert set(sp.names()) == CORE_NAMES
+    assert "scale_pos_weight" not in sp.names()
+
+
+def test_default_regression_space_extended_contents() -> None:
+    sp = default_regression_space(extended=True)
+    names = set(sp.names())
+    assert names == CORE_NAMES | {"grow_policy", "max_leaves", "num_parallel_tree"}
+    assert "scale_pos_weight" not in names
 
 
 if __name__ == "__main__":  # pragma: no cover

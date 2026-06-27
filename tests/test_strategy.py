@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import xgboost as xgb
 
-from pbt_xgb.member import PopulationMember
-from pbt_xgb.search_space import Hyperparameter, SearchSpace
-from pbt_xgb.strategy import GeneticStrategy
+from genetic_xgb.member import PopulationMember
+from genetic_xgb.search_space import Hyperparameter, SearchSpace
+from genetic_xgb.strategy import GeneticStrategy
 
 GENE_NAMES = [f"g{i}" for i in range(10)]
 

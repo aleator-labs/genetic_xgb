@@ -1,7 +1,7 @@
 [project]
-name = "population-based-training"
+name = "genetic-xgb"
 version = "0.1.0"
-description = "Population-based training (a genetic algorithm) for XGBoost classifier hyperparameters"
+description = "Genetic-algorithm hyperparameter optimization for XGBoost classifiers and regressors"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -27,15 +27,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pbt_xgb"]
+packages = ["src/genetic_xgb"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=pbt_xgb --cov-report=term-missing --cov-report=html --cov-branch --cov-fail-under=100"
+addopts = "--cov=genetic_xgb --cov-report=term-missing --cov-report=html --cov-branch --cov-fail-under=100"
 testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
-source = ["pbt_xgb"]
+source = ["genetic_xgb"]
 
 [tool.coverage.report]
 show_missing = true

@@ -1,4 +1,4 @@
-"""Gene/search-space layer for population-based training of XGBoost classifiers."""
+"""Gene/search-space layer for the genetic-algorithm XGBoost estimators."""
 
 from __future__ import annotations
 
@@ -78,9 +78,9 @@ class SearchSpace:
         return self.clip(new)
 
 
-def default_classification_space(extended: bool = False, imbalance: bool = False) -> SearchSpace:
-    """Build the default XGBoost classification search space."""
-    params: list[Hyperparameter] = [
+def _core_genes() -> list[Hyperparameter]:
+    """The 11 tree genes shared by classification and regression."""
+    return [
         Hyperparameter("learning_rate", "float", low=1e-3, high=0.3, log=True),
         Hyperparameter("max_depth", "int", low=3, high=10),
         Hyperparameter("min_child_weight", "float", low=1, high=10, log=True),
@@ -93,12 +93,30 @@ def default_classification_space(extended: bool = False, imbalance: bool = False
         Hyperparameter("reg_alpha", "float", low=1e-8, high=1, log=True),
         Hyperparameter("reg_lambda", "float", low=1e-8, high=10, log=True),
     ]
+
+
+def _extended_genes() -> list[Hyperparameter]:
+    """Tree-growth shape genes added when ``extended=True``."""
+    return [
+        Hyperparameter("grow_policy", "categorical", choices=("depthwise", "lossguide")),
+        Hyperparameter("max_leaves", "int", low=0, high=256),
+        Hyperparameter("num_parallel_tree", "int", low=1, high=4),
+    ]
+
+
+def default_classification_space(extended: bool = False, imbalance: bool = False) -> SearchSpace:
+    """Build the default XGBoost classification search space."""
+    params = _core_genes()
     if extended:
-        params += [
-            Hyperparameter("grow_policy", "categorical", choices=("depthwise", "lossguide")),
-            Hyperparameter("max_leaves", "int", low=0, high=256),
-            Hyperparameter("num_parallel_tree", "int", low=1, high=4),
-        ]
+        params += _extended_genes()
     if imbalance:
         params.append(Hyperparameter("scale_pos_weight", "float", low=0.1, high=10, log=True))
+    return SearchSpace(params)
+
+
+def default_regression_space(extended: bool = False) -> SearchSpace:
+    """Build the default XGBoost regression search space (no class-imbalance gene)."""
+    params = _core_genes()
+    if extended:
+        params += _extended_genes()
     return SearchSpace(params)

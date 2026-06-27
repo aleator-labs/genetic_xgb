@@ -1,14 +1,14 @@
-"""Integration tests for PopulationBasedTraining on real datasets (no mocks)."""
+"""Integration tests for GeneticXGBClassifier on real datasets (no mocks)."""
 
 from __future__ import annotations
 
 import numpy as np
 
-from pbt_xgb import PopulationBasedTraining
-from pbt_xgb.search_space import default_classification_space
+from genetic_xgb import GeneticXGBClassifier
+from genetic_xgb.search_space import default_classification_space
 
 
-def _short_pbt(**overrides) -> PopulationBasedTraining:
+def _short_pbt(**overrides) -> GeneticXGBClassifier:
     params = {
         "population_size": 6,
         "generations": 4,
@@ -18,7 +18,7 @@ def _short_pbt(**overrides) -> PopulationBasedTraining:
         "selection_top_k": 2,
     }
     params.update(overrides)
-    return PopulationBasedTraining(**params)
+    return GeneticXGBClassifier(**params)
 
 
 def test_best_fitness_no_worse_than_generation_zero(binary_data) -> None:
@@ -79,9 +79,11 @@ def test_history_rows_and_lineage_columns(binary_data) -> None:
         binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
     )
     assert len(pbt.history_) == pbt.generations * pbt.population_size
-    for column in ("generation", "member_id", "score", "n_rounds", "parents"):
+    for column in ("generation", "member_id", "score", "n_rounds", "best_iteration", "parents"):
         assert column in pbt.history_.columns
     assert "learning_rate" in pbt.history_.columns
+    # Early stopping is off by default -> best_iteration is recorded as null.
+    assert pbt.history_["best_iteration"].isna().all()
 
 
 def test_target_fitness_triggers_early_stop(binary_data) -> None:
@@ -111,3 +113,13 @@ def test_base_params_override_merges_into_booster_config(binary_data) -> None:
     proba = pbt.predict_proba(binary_data.X_val)
     assert proba.shape == (binary_data.X_val.shape[0], binary_data.n_classes)
     assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-5)
+
+
+def test_early_stopping_records_best_iteration(binary_data) -> None:
+    # With early stopping on, every member records a non-null best_iteration and still predicts.
+    pbt = _short_pbt(step_rounds=60, early_stopping_rounds=5).fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    assert pbt.history_["best_iteration"].notna().all()
+    proba = pbt.predict_proba(binary_data.X_val)
+    assert proba.shape == (binary_data.X_val.shape[0], binary_data.n_classes)

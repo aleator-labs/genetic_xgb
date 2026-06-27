@@ -1,7 +1,8 @@
-"""Metric registry and resolver for population-based training.
+"""Metric registry and resolver for the genetic-algorithm estimators.
 
-This module OWNS :class:`MetricSpec` plus the metric registry and resolver.
-All scorer functions are module-level so they remain picklable for joblib.
+This module OWNS :class:`MetricSpec` plus the classification and regression metric
+registries and the resolver. All scorer functions are module-level so they remain
+picklable for joblib.
 """
 
 from __future__ import annotations
@@ -15,6 +16,9 @@ from sklearn.metrics import (
     average_precision_score,
     f1_score,
     log_loss,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
     roc_auc_score,
 )
 from sklearn.preprocessing import label_binarize
@@ -66,6 +70,22 @@ def _average_precision(y_true, proba):
     return average_precision_score(y_bin, proba, average="macro")
 
 
+def _rmse(y_true, pred):
+    return np.sqrt(mean_squared_error(y_true, pred))
+
+
+def _mse(y_true, pred):
+    return mean_squared_error(y_true, pred)
+
+
+def _mae(y_true, pred):
+    return mean_absolute_error(y_true, pred)
+
+
+def _r2(y_true, pred):
+    return r2_score(y_true, pred)
+
+
 METRICS: dict[str, MetricSpec] = {
     "logloss": MetricSpec("logloss", greater_is_better=False, needs_proba=True, fn=_logloss),
     "accuracy": MetricSpec("accuracy", greater_is_better=True, needs_proba=False, fn=_accuracy),
@@ -76,20 +96,35 @@ METRICS: dict[str, MetricSpec] = {
     ),
 }
 
+REGRESSION_METRICS: dict[str, MetricSpec] = {
+    "rmse": MetricSpec("rmse", greater_is_better=False, needs_proba=False, fn=_rmse),
+    "mse": MetricSpec("mse", greater_is_better=False, needs_proba=False, fn=_mse),
+    "mae": MetricSpec("mae", greater_is_better=False, needs_proba=False, fn=_mae),
+    "r2": MetricSpec("r2", greater_is_better=True, needs_proba=False, fn=_r2),
+}
 
-def resolve_metric(metric, greater_is_better=None) -> MetricSpec:
-    """Resolve ``metric`` (a registry key or callable) to a :class:`MetricSpec`."""
+# Readable alias; ``METRICS`` is kept as the default so existing call sites keep working.
+CLASSIFICATION_METRICS = METRICS
+
+
+def resolve_metric(metric, greater_is_better=None, registry=None) -> MetricSpec:
+    """Resolve ``metric`` (a key in ``registry`` or a callable) to a :class:`MetricSpec`.
+
+    ``registry`` defaults to the classification :data:`METRICS`; the regressor passes
+    :data:`REGRESSION_METRICS`.
+    """
+    registry = METRICS if registry is None else registry
     if isinstance(metric, str):
         try:
-            return METRICS[metric]
+            return registry[metric]
         except KeyError:
-            available = ", ".join(METRICS)
+            available = ", ".join(registry)
             raise ValueError(f"Unknown metric {metric!r}; available metrics: {available}") from None
     if greater_is_better is None:
         raise ValueError("greater_is_better must be provided when metric is a callable.")
     return MetricSpec(
         name=getattr(metric, "__name__", "custom"),
         greater_is_better=greater_is_better,
-        needs_proba=True,
+        needs_proba=False,
         fn=metric,
     )

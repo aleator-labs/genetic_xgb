@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from pbt_xgb.history import History
-from pbt_xgb.member import PopulationMember
+from genetic_xgb.history import History
+from genetic_xgb.member import PopulationMember
 
 
 def test_record_one_row_per_member_with_lineage_and_genes() -> None:
@@ -25,7 +25,7 @@ def test_record_one_row_per_member_with_lineage_and_genes() -> None:
 
     assert isinstance(frame, pd.DataFrame)
     assert len(frame) == 2
-    for column in ("generation", "member_id", "score", "n_rounds", "parents"):
+    for column in ("generation", "member_id", "score", "n_rounds", "best_iteration", "parents"):
         assert column in frame.columns
     assert "learning_rate" in frame.columns
     assert "max_depth" in frame.columns

@@ -1,8 +1,8 @@
-# pbt_xgb — Population-Based Training for XGBoost
+# genetic_xgb — Genetic-Algorithm Hyperparameter Optimization for XGBoost
 
-A small library that optimizes **XGBoost classifier** hyperparameters by **evolving a population
-of models with a genetic algorithm**, grounded in general evolutionary principles rather than any
-single paper.
+A small library that optimizes **XGBoost classifier and regressor** hyperparameters by **evolving a
+population of models with a genetic algorithm**, grounded in general evolutionary principles rather
+than any single paper.
 
 Each individual carries a **genome** (its hyperparameters) and a **phenotype** (its trained
 booster). Every generation the population is grown a few boosting rounds (warm-start), scored on a
@@ -19,17 +19,17 @@ validation set (**fitness**), and evolved through the five canonical stages:
 Models are trained **only** on the training set; fitness is computed **only** on the validation
 set (enforced by tests). Population evaluation runs in parallel via joblib.
 
-## Usage
+## Classification
 
 ```python
 from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
-from pbt_xgb import PopulationBasedTraining
+from genetic_xgb import GeneticXGBClassifier
 
 X, y = load_breast_cancer(return_X_y=True)
 X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
 
-pbt = PopulationBasedTraining(
+clf = GeneticXGBClassifier(
     population_size=16,
     metric="roc_auc",          # logloss | accuracy | roc_auc | f1 | average_precision | callable
     selection_top_k=4,         # how many survive each generation
@@ -42,20 +42,72 @@ pbt = PopulationBasedTraining(
     step_rounds=10,            # boosting rounds added per generation
     n_jobs=-1, random_state=42,
 )
-pbt.fit(X_train, y_train, X_val, y_val)
+clf.fit(X_train, y_train, X_val, y_val)
 
-pbt.best_score_              # best validation fitness
-pbt.best_params_            # winning hyperparameters
-pbt.predict_proba(X_val)    # (n_samples, n_classes)
-pbt.history_                # pandas DataFrame: full per-generation lineage
+clf.best_score_              # best validation fitness
+clf.best_params_            # winning hyperparameters
+clf.predict_proba(X_val)    # (n_samples, n_classes)
+clf.predict(X_val)          # class labels
+clf.history_                # pandas DataFrame: full per-generation lineage
 ```
 
-Custom / wider search space:
+## Regression
 
 ```python
-from pbt_xgb import default_classification_space
+from sklearn.datasets import load_diabetes
+from sklearn.model_selection import train_test_split
+from genetic_xgb import GeneticXGBRegressor
+
+X, y = load_diabetes(return_X_y=True)
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.3, random_state=0)
+
+reg = GeneticXGBRegressor(
+    population_size=16,
+    metric="rmse",             # rmse | mae | mse | r2 | callable
+    generations=20,
+    step_rounds=10,
+    n_jobs=-1, random_state=42,
+)
+reg.fit(X_train, y_train, X_val, y_val)
+
+reg.best_score_             # best validation RMSE
+reg.predict(X_val)          # continuous predictions (no predict_proba)
+```
+
+Both estimators share the same genetic-algorithm core (`BaseGeneticXGB`); only the objective,
+metric set, default search space, and prediction differ.
+
+## Built-in early stopping
+
+Set `early_stopping_rounds` to use XGBoost's native early stopping with the validation set as the
+eval watchlist. Each member then stops adding trees once validation stops improving, so `step_rounds`
+becomes a per-generation **upper bound** — set it comfortably larger than `early_stopping_rounds`.
+The full (stopped) booster is kept; `history_['best_iteration']` records where each member stopped.
+
+```python
+reg = GeneticXGBRegressor(
+    metric="rmse",
+    step_rounds=60,            # upper bound per generation
+    early_stopping_rounds=10,  # stop a member's growth on a 10-round plateau
+    eval_metric="rmse",        # optional; defaults to the objective's native metric
+)
+```
+
+Trees are always fit on the **training** gradients only; with early stopping the validation set
+influences *when to stop adding trees* (model selection), never the gradients.
+
+## Search spaces
+
+```python
+from genetic_xgb import default_classification_space, default_regression_space
+
+# Classification: add tree-growth genes and a class-imbalance gene.
 space = default_classification_space(extended=True, imbalance=True)
-pbt = PopulationBasedTraining(search_space=space, ...)
+
+# Regression: same tree genes (no class-imbalance gene).
+space = default_regression_space(extended=True)
+
+clf = GeneticXGBClassifier(search_space=space, ...)
 ```
 
 ## Development
@@ -64,7 +116,7 @@ pbt = PopulationBasedTraining(search_space=space, ...)
 uv sync
 uv run ruff check . && uv run ruff format --check .
 uv run pytest                       # 100% branch-coverage gate enforced
-uv run jupyter lab examples/demo_classification.ipynb   # interactive demo
-# or run it headless:
-uv run jupyter nbconvert --to notebook --execute --inplace examples/demo_classification.ipynb
+uv run jupyter lab examples/demo_classification.ipynb   # or examples/demo_regression.ipynb
+# headless execution:
+uv run jupyter nbconvert --to notebook --execute --inplace examples/demo_regression.ipynb
 ```

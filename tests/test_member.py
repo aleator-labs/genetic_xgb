@@ -7,7 +7,7 @@ import pickle
 import numpy as np
 import xgboost as xgb
 
-from pbt_xgb.member import PopulationMember
+from genetic_xgb.member import PopulationMember
 
 
 def _tiny_booster(rounds: int = 5) -> xgb.Booster:

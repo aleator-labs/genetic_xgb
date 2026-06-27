@@ -1,4 +1,4 @@
-"""Population member dataclass for population-based training."""
+"""Population member dataclass for the genetic-algorithm estimators."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ class PopulationMember:
     booster_bytes: bytes | None = None
     score: float | None = None
     n_rounds: int = 0
+    best_iteration: int | None = None
     parents: tuple[int, int] | None = None
 
     def save_booster(self, booster: xgb.Booster) -> None:
@@ -41,5 +42,6 @@ class PopulationMember:
         self.booster_bytes = dominant.booster_bytes
         self.hyperparams = hyperparams
         self.n_rounds = dominant.n_rounds
+        self.best_iteration = dominant.best_iteration
         self.parents = (dominant.id, recessive.id)
         self.score = None

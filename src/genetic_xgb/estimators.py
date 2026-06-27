@@ -1,4 +1,9 @@
-"""Population-based training estimator that ties the whole library together."""
+"""Genetic-algorithm estimators (classifier + regressor) for XGBoost.
+
+:class:`BaseGeneticXGB` holds the task-agnostic genetic-algorithm engine; the two
+subclasses supply only the task-specific hooks (objective, default metric and
+registry, default search space, and prediction).
+"""
 
 from __future__ import annotations
 
@@ -8,24 +13,27 @@ from typing import Any
 import numpy as np
 import xgboost as xgb
 
-from pbt_xgb.executor import make_executor
-from pbt_xgb.history import History
-from pbt_xgb.member import PopulationMember
-from pbt_xgb.metrics import resolve_metric
-from pbt_xgb.search_space import default_classification_space
-from pbt_xgb.strategy import GeneticStrategy
-from pbt_xgb.trainer import train_step
+from genetic_xgb.executor import make_executor
+from genetic_xgb.history import History
+from genetic_xgb.member import PopulationMember
+from genetic_xgb.metrics import CLASSIFICATION_METRICS, REGRESSION_METRICS, resolve_metric
+from genetic_xgb.search_space import default_classification_space, default_regression_space
+from genetic_xgb.strategy import GeneticStrategy
+from genetic_xgb.trainer import train_step
 
 _SEED_MOD = 2**31 - 1
 
 
-class PopulationBasedTraining:
-    """Evolve a population of XGBoost classifiers via a genetic algorithm."""
+class BaseGeneticXGB:
+    """Shared genetic-algorithm engine. Subclasses fill in the task-specific hooks."""
+
+    _default_metric: str = "logloss"
+    _metric_registry: dict = CLASSIFICATION_METRICS
 
     def __init__(
         self,
         population_size: int = 16,
-        metric: Any = "logloss",
+        metric: Any = None,
         selection_top_k: int = 4,
         dominance_prob: float = 0.7,
         mutation_fraction: float = 0.3,
@@ -36,6 +44,8 @@ class PopulationBasedTraining:
         patience: int | None = None,
         min_delta: float = 0.0,
         step_rounds: int = 10,
+        early_stopping_rounds: int | None = None,
+        eval_metric: str | None = None,
         search_space: Any = None,
         strategy: Any = None,
         n_jobs: int = -1,
@@ -56,6 +66,8 @@ class PopulationBasedTraining:
         self.patience = patience
         self.min_delta = min_delta
         self.step_rounds = step_rounds
+        self.early_stopping_rounds = early_stopping_rounds
+        self.eval_metric = eval_metric
         self.search_space = search_space
         self.strategy = strategy
         self.n_jobs = n_jobs
@@ -76,30 +88,27 @@ class PopulationBasedTraining:
             return False
         return best >= self.target_fitness if greater else best <= self.target_fitness
 
+    # --- task hooks (overridden by subclasses) ---
+    def _make_base_params(self, y_train) -> dict:  # noqa: N803
+        raise NotImplementedError
+
+    def _default_space(self):
+        raise NotImplementedError
+
     def fit(self, X_train, y_train, X_val, y_val):  # noqa: N803
         X_train = np.asarray(X_train, dtype=np.float32)  # noqa: N806
         X_val = np.asarray(X_val, dtype=np.float32)  # noqa: N806
         y_train = np.asarray(y_train)
         y_val = np.asarray(y_val)
 
-        n_classes = int(np.unique(y_train).size)
-        base: dict[str, Any] = {
-            "tree_method": "hist",
-            "max_bin": 256,
-            "verbosity": 0,
-            "nthread": 1,
-        }
-        if n_classes == 2:
-            base["objective"] = "binary:logistic"
-        else:
-            base["objective"] = "multi:softprob"
-            base["num_class"] = n_classes
+        base = self._make_base_params(y_train)
         if self.base_params:
             base.update(self.base_params)
 
-        metric_spec = resolve_metric(self.metric, self.greater_is_better)
+        metric_name = self._default_metric if self.metric is None else self.metric
+        metric_spec = resolve_metric(metric_name, self.greater_is_better, self._metric_registry)
         greater = metric_spec.greater_is_better
-        space = self.search_space or default_classification_space()
+        space = self.search_space or self._default_space()
 
         rng = np.random.default_rng(self.random_state)
         members = [
@@ -141,6 +150,8 @@ class PopulationBasedTraining:
                     "metric": metric_spec,
                     "base_params": base,
                     "seed": self._member_seed(generation, m.id),
+                    "early_stopping_rounds": self.early_stopping_rounds,
+                    "eval_metric": self.eval_metric,
                 }
                 for m in members
             ]
@@ -149,6 +160,7 @@ class PopulationBasedTraining:
                 member.booster_bytes = result["booster_bytes"]
                 member.score = result["fitness"]
                 member.n_rounds = result["n_rounds"]
+                member.best_iteration = result["best_iteration"]
 
             history.record(generation, members)
 
@@ -182,18 +194,63 @@ class PopulationBasedTraining:
         self.best_booster_ = best_bytes
         self.best_member_ = best_member
         self.history_ = history.to_frame()
-        self.n_classes_ = n_classes
         self.base_params_ = base
         return self
 
-    def predict_proba(self, X):  # noqa: N803
+    def _raw_predict(self, X):  # noqa: N803
         X = np.asarray(X, dtype=np.float32)  # noqa: N806
         booster = xgb.Booster()
         booster.load_model(bytearray(self.best_booster_))
-        proba = booster.predict(xgb.DMatrix(X))
+        return booster.predict(xgb.DMatrix(X))
+
+
+class GeneticXGBClassifier(BaseGeneticXGB):
+    """Evolve a population of XGBoost classifiers via a genetic algorithm."""
+
+    _default_metric = "logloss"
+    _metric_registry = CLASSIFICATION_METRICS
+
+    def _make_base_params(self, y_train):  # noqa: N803
+        n_classes = int(np.unique(y_train).size)
+        self.n_classes_ = n_classes
+        base = {"tree_method": "hist", "max_bin": 256, "verbosity": 0, "nthread": 1}
+        if n_classes == 2:
+            base["objective"] = "binary:logistic"
+        else:
+            base["objective"] = "multi:softprob"
+            base["num_class"] = n_classes
+        return base
+
+    def _default_space(self):
+        return default_classification_space()
+
+    def predict_proba(self, X):  # noqa: N803
+        proba = self._raw_predict(X)
         if proba.ndim == 1:
             return np.column_stack([1.0 - proba, proba])
         return proba
 
     def predict(self, X):  # noqa: N803
         return self.predict_proba(X).argmax(axis=1)
+
+
+class GeneticXGBRegressor(BaseGeneticXGB):
+    """Evolve a population of XGBoost regressors via a genetic algorithm."""
+
+    _default_metric = "rmse"
+    _metric_registry = REGRESSION_METRICS
+
+    def _make_base_params(self, y_train):  # noqa: N803
+        return {
+            "tree_method": "hist",
+            "max_bin": 256,
+            "verbosity": 0,
+            "nthread": 1,
+            "objective": "reg:squarederror",
+        }
+
+    def _default_space(self):
+        return default_regression_space()
+
+    def predict(self, X):  # noqa: N803
+        return self._raw_predict(X)

@@ -4,13 +4,18 @@ import numpy as np
 import pytest
 import xgboost as xgb
 
-from pbt_xgb.metrics import (
+from genetic_xgb.metrics import (
     METRICS,
+    REGRESSION_METRICS,
     MetricSpec,
     _accuracy,
     _average_precision,
     _f1,
     _logloss,
+    _mae,
+    _mse,
+    _r2,
+    _rmse,
     _roc_auc,
     _to_labels,
     resolve_metric,
@@ -149,7 +154,7 @@ def test_resolve_metric_callable():
     assert isinstance(spec, MetricSpec)
     assert spec.name == "my_metric"
     assert spec.greater_is_better is True
-    assert spec.needs_proba is True
+    assert spec.needs_proba is False
     assert spec.fn is my_metric
     assert spec.score(np.array([0, 1]), np.array([0.1, 0.9])) == 0.5
 
@@ -176,3 +181,47 @@ def test_resolve_metric_callable_object_without_name():
 def test_resolve_metric_callable_missing_gib():
     with pytest.raises(ValueError):
         resolve_metric(lambda y, p: 0.0)
+
+
+# ----------------------- regression metric tests -----------------------
+
+
+def _regression_pred(regression_data):
+    """Train a tiny real xgboost regressor and return continuous predictions."""
+    dtrain = xgb.DMatrix(regression_data.X_train, label=regression_data.y_train)
+    booster = xgb.train(
+        {"objective": "reg:squarederror", "tree_method": "hist", "verbosity": 0},
+        dtrain,
+        num_boost_round=5,
+    )
+    pred = booster.predict(xgb.DMatrix(regression_data.X_val))
+    return regression_data.y_val, pred
+
+
+def test_regression_scorers(regression_data):
+    y, pred = _regression_pred(regression_data)
+    assert _mse(y, pred) > 0
+    # rmse is the square root of mse.
+    np.testing.assert_allclose(_rmse(y, pred), np.sqrt(_mse(y, pred)))
+    assert _mae(y, pred) > 0
+    assert _r2(y, pred) <= 1.0
+
+
+def test_regression_registry_keys():
+    assert set(REGRESSION_METRICS) == {"rmse", "mse", "mae", "r2"}
+    assert REGRESSION_METRICS["rmse"].greater_is_better is False
+    assert REGRESSION_METRICS["r2"].greater_is_better is True
+    assert all(spec.needs_proba is False for spec in REGRESSION_METRICS.values())
+
+
+def test_resolve_metric_with_regression_registry():
+    spec = resolve_metric("rmse", registry=REGRESSION_METRICS)
+    assert spec is REGRESSION_METRICS["rmse"]
+
+
+def test_resolve_metric_unknown_key_in_regression_registry():
+    with pytest.raises(ValueError) as exc:
+        resolve_metric("logloss", registry=REGRESSION_METRICS)
+    msg = str(exc.value)
+    for key in REGRESSION_METRICS:
+        assert key in msg

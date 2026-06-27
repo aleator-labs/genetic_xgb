@@ -6,8 +6,8 @@ import numpy as np
 import xgboost as xgb
 from sklearn.datasets import make_classification
 
-from pbt_xgb.metrics import resolve_metric
-from pbt_xgb.trainer import train_step
+from genetic_xgb.metrics import resolve_metric
+from genetic_xgb.trainer import train_step
 
 BINARY_BASE = {
     "objective": "binary:logistic",
@@ -38,10 +38,12 @@ def test_cold_start_produces_valid_booster(binary_data):
         base_params=BINARY_BASE,
         seed=0,
     )
-    assert set(out) == {"booster_bytes", "fitness", "n_rounds"}
+    assert set(out) == {"booster_bytes", "fitness", "n_rounds", "best_iteration"}
     assert isinstance(out["booster_bytes"], bytes) and len(out["booster_bytes"]) > 0
     assert isinstance(out["fitness"], float)
     assert out["n_rounds"] == 10
+    # Early stopping off -> no best_iteration recorded.
+    assert out["best_iteration"] is None
     # The returned bytes load into a usable booster.
     booster = xgb.Booster()
     booster.load_model(bytearray(out["booster_bytes"]))
@@ -152,4 +154,60 @@ def test_no_leakage_train_only_model_at_or_below_chance_on_adversarial_val():
         seed=0,
     )
     # A train-only model cannot exploit the reversed val labels: at/below chance.
+    assert out["fitness"] <= 0.55
+
+
+def test_early_stopping_caps_rounds_and_records_best_iteration(binary_data):
+    # step_rounds is a large upper bound; validation plateaus so it stops well before it.
+    out = train_step(
+        booster_bytes=None,
+        hyperparams={"learning_rate": 0.3, "max_depth": 3},
+        train=(binary_data.X_train, binary_data.y_train),
+        val=(binary_data.X_val, binary_data.y_val),
+        step_rounds=200,
+        metric=resolve_metric("logloss"),
+        base_params=BINARY_BASE,
+        seed=0,
+        early_stopping_rounds=10,
+    )
+    assert out["n_rounds"] < 200  # early stopping capped the round count
+    assert isinstance(out["best_iteration"], int)
+
+
+def test_early_stopping_with_explicit_eval_metric(binary_data):
+    # Passing eval_metric routes it into params; the run still produces a valid model.
+    out = train_step(
+        booster_bytes=None,
+        hyperparams=HP,
+        train=(binary_data.X_train, binary_data.y_train),
+        val=(binary_data.X_val, binary_data.y_val),
+        step_rounds=100,
+        metric=resolve_metric("logloss"),
+        base_params=BINARY_BASE,
+        seed=0,
+        early_stopping_rounds=10,
+        eval_metric="auc",
+    )
+    assert out["best_iteration"] is not None
+    assert out["n_rounds"] >= 1
+
+
+def test_early_stopping_no_leakage_on_adversarial_val():
+    # Same reversed-signal probe, now WITH early stopping: still at/below chance.
+    features, y = make_classification(
+        n_samples=400, n_features=10, n_informative=6, n_redundant=0, random_state=7
+    )
+    X = features.astype(np.float32)  # noqa: N806
+    half = X.shape[0] // 2
+    out = train_step(
+        booster_bytes=None,
+        hyperparams={"learning_rate": 0.3, "max_depth": 4},
+        train=(X[:half], y[:half]),
+        val=(X[half:], 1 - y[half:]),
+        step_rounds=100,
+        metric=resolve_metric("accuracy"),
+        base_params=BINARY_BASE,
+        seed=0,
+        early_stopping_rounds=10,
+    )
     assert out["fitness"] <= 0.55

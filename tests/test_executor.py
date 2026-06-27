@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pbt_xgb.executor import (
+from genetic_xgb.executor import (
     Executor,
     JoblibExecutor,
     SequentialExecutor,

@@ -6,13 +6,14 @@ from collections import namedtuple
 
 import numpy as np
 import pytest
-from sklearn.datasets import load_breast_cancer, load_iris
+from sklearn.datasets import load_breast_cancer, load_diabetes, load_iris
 from sklearn.model_selection import train_test_split
 
 SEED = 42
 
 # A train/validation split of real arrays. Fields are plain numpy arrays.
 Split = namedtuple("Split", ["X_train", "y_train", "X_val", "y_val", "n_classes"])
+RegSplit = namedtuple("RegSplit", ["X_train", "y_train", "X_val", "y_val"])
 
 
 def _split(X, y) -> Split:  # noqa: N803
@@ -34,6 +35,18 @@ def multiclass_data() -> Split:
     """Real 3-class classification data (iris)."""
     data = load_iris()
     return _split(np.asarray(data.data, dtype=np.float32), np.asarray(data.target))
+
+
+@pytest.fixture
+def regression_data() -> RegSplit:
+    """Real regression data (diabetes, 442 rows, 10 features)."""
+    data = load_diabetes()
+    X = np.asarray(data.data, dtype=np.float32)  # noqa: N806
+    y = np.asarray(data.target, dtype=np.float32)
+    X_train, X_val, y_train, y_val = train_test_split(  # noqa: N806
+        X, y, test_size=0.3, random_state=SEED
+    )
+    return RegSplit(X_train, y_train, X_val, y_val)
 
 
 @pytest.fixture

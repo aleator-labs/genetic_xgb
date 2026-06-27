@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pbt_xgb.member import PopulationMember
-from pbt_xgb.search_space import SearchSpace
+from genetic_xgb.member import PopulationMember
+from genetic_xgb.search_space import SearchSpace
 
 
 class GeneticStrategy:

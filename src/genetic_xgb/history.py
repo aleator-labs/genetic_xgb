@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from pbt_xgb.member import PopulationMember
+from genetic_xgb.member import PopulationMember
 
 
 class History:
@@ -21,6 +21,7 @@ class History:
                 "member_id": member.id,
                 "score": member.score,
                 "n_rounds": member.n_rounds,
+                "best_iteration": member.best_iteration,
                 "parents": member.parents,
             }
             row.update(member.hyperparams)
