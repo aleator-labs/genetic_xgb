@@ -136,9 +136,23 @@ clf = GeneticXGBClassifier(search_space=space, ...)
 
 ```bash
 uv sync
+git config core.hooksPath .githooks  # one-time: enable the pre-push quality gate
 uv run ruff check . && uv run ruff format --check .
 uv run pytest                       # 100% branch-coverage gate enforced
 uv run jupyter lab examples/demo_classification.ipynb   # or examples/demo_regression.ipynb
 # headless execution:
 uv run jupyter nbconvert --to notebook --execute --inplace examples/demo_regression.ipynb
 ```
+
+### Pre-push gate
+
+`.githooks/pre-push` runs ruff (lint + format) and the test suite at 100% branch coverage, and
+blocks the push if anything fails. Enable it once per clone with
+`git config core.hooksPath .githooks` (shown above). Bypass in an emergency with
+`git push --no-verify`.
+
+### Multi-agent review (Claude Code)
+
+`.claude/workflows/review-dropin.mjs` is a reusable review workflow: 5 independent reviewers →
+aggregate/de-duplicate → one adversarial verifier per finding. Run `/review-dropin` in a Claude
+Code session (or `Workflow({name: "review-dropin"})`).

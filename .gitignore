@@ -14,3 +14,6 @@ htmlcov/
 .coverage
 .pytest_cache/
 .ruff_cache/
+
+# Scratch multi-agent workflow scripts (saved ones live in .claude/workflows/)
+.pbt_*_workflow.mjs

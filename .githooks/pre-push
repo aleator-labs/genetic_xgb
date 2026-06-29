@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Pre-push quality gate for genetic_xgb.
+# Blocks the push unless ruff (lint + format) and the test suite at 100% branch
+# coverage all pass. Bypass in an emergency with: git push --no-verify
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "pre-push: 'uv' not found on PATH — cannot run the quality gate." >&2
+  echo "          Install uv, or bypass with: git push --no-verify" >&2
+  exit 1
+fi
+
+fail() {
+  echo "" >&2
+  echo "pre-push: $1 — push aborted. (bypass: git push --no-verify)" >&2
+  exit 1
+}
+
+echo "pre-push: ruff check ..."
+uv run ruff check . || fail "ruff check failed"
+
+echo "pre-push: ruff format --check ..."
+uv run ruff format --check . || fail "ruff format check failed (run: uv run ruff format .)"
+
+echo "pre-push: pytest (enforces 100% branch coverage) ..."
+uv run pytest -p no:cacheprovider -q || fail "tests or coverage gate failed"
+
+echo "pre-push: all checks passed -- pushing."
