@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from sklearn.exceptions import NotFittedError
 
 from genetic_xgb import GeneticXGBClassifier
 from genetic_xgb.search_space import default_classification_space
+
+_TINY_X = np.zeros((6, 3), dtype=np.float32)
+_TINY_Y = np.array([0, 1, 0, 1, 0, 1])
+
+
+def _nan_metric(y_true, proba) -> float:
+    """A metric that always returns NaN (used to exercise the no-finite-fitness guard)."""
+    return float("nan")
 
 
 def _short_pbt(**overrides) -> GeneticXGBClassifier:
@@ -123,3 +133,135 @@ def test_early_stopping_records_best_iteration(binary_data) -> None:
     assert pbt.history_["best_iteration"].notna().all()
     proba = pbt.predict_proba(binary_data.X_val)
     assert proba.shape == (binary_data.X_val.shape[0], binary_data.n_classes)
+
+
+# --- F1: label encoding round-trip ---------------------------------------------------------
+
+
+def test_string_labels_train_and_round_trip(multiclass_data) -> None:
+    names = np.array(["setosa", "versicolor", "virginica"])
+    y_train = names[multiclass_data.y_train]
+    y_val = names[multiclass_data.y_val]
+    pbt = _short_pbt(metric="accuracy").fit(
+        multiclass_data.X_train, y_train, multiclass_data.X_val, y_val
+    )
+    # classes_ are the ORIGINAL labels in sorted order.
+    assert list(pbt.classes_) == ["setosa", "versicolor", "virginica"]
+    preds = pbt.predict(multiclass_data.X_val)
+    # predict returns the original string labels, not positional indices.
+    assert preds.dtype.kind in {"U", "S", "O"}
+    assert set(np.unique(preds)).issubset(set(names.tolist()))
+    proba = pbt.predict_proba(multiclass_data.X_val)
+    assert proba.shape == (multiclass_data.X_val.shape[0], 3)
+    # proba columns align with classes_: argmax mapped through classes_ equals predict.
+    assert np.array_equal(pbt.classes_[proba.argmax(axis=1)], preds)
+
+
+def test_noncontiguous_int_labels_round_trip(multiclass_data) -> None:
+    mapping = np.array([10, 20, 30])
+    y_train = mapping[multiclass_data.y_train]
+    y_val = mapping[multiclass_data.y_val]
+    pbt = _short_pbt(metric="accuracy").fit(
+        multiclass_data.X_train, y_train, multiclass_data.X_val, y_val
+    )
+    assert list(pbt.classes_) == [10, 20, 30]
+    preds = pbt.predict(multiclass_data.X_val)
+    assert set(np.unique(preds)).issubset({10, 20, 30})
+    proba = pbt.predict_proba(multiclass_data.X_val)
+    assert np.array_equal(pbt.classes_[proba.argmax(axis=1)], preds)
+
+
+def test_y_val_label_unseen_in_training_raises() -> None:
+    x_val = np.zeros((3, 3), dtype=np.float32)
+    y_val = np.array([0, 1, 2])  # class 2 never seen in training
+    with pytest.raises(ValueError, match="not present in the training labels"):
+        _short_pbt().fit(_TINY_X, _TINY_Y, x_val, y_val)
+
+
+def test_single_class_in_y_train_raises() -> None:
+    y_train = np.zeros(6, dtype=int)  # only one class
+    with pytest.raises(ValueError, match="at least 2 classes"):
+        _short_pbt().fit(_TINY_X, y_train, _TINY_X, y_train)
+
+
+# --- F4: prediction before fit ----------------------------------------------------------------
+
+
+def test_predict_before_fit_raises_not_fitted() -> None:
+    pbt = GeneticXGBClassifier()
+    with pytest.raises(NotFittedError):
+        pbt.predict(_TINY_X)
+    with pytest.raises(NotFittedError):
+        pbt.predict_proba(_TINY_X)
+
+
+# --- F11: all-nonfinite fitness ---------------------------------------------------------------
+
+
+def test_all_nonfinite_fitness_raises_clear_error(binary_data) -> None:
+    pbt = _short_pbt(metric=_nan_metric, greater_is_better=False)
+    with pytest.raises(ValueError, match="finite fitness"):
+        pbt.fit(binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val)
+
+
+# --- F5 / F6: input validation guards ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"population_size": 1}, "population_size must be >= 2"),
+        ({"population_size": 6, "selection_top_k": 6}, "disabling all evolution"),
+        ({"selection_top_k": 0}, "selection_top_k"),
+        ({"generations": 0}, "generations must be >= 1"),
+        ({"step_rounds": 0}, "step_rounds must be >= 1"),
+        ({"mutation_fraction": 1.5}, "mutation_fraction"),
+        ({"mutation_intensity": -0.1}, "mutation_intensity"),
+        ({"dominance_prob": 1.5}, "dominance_prob"),
+        ({"resample_prob": 1.5}, "resample_prob"),
+    ],
+)
+def test_invalid_hyperparams_raise(kwargs, match) -> None:
+    pbt = _short_pbt(**kwargs)
+    with pytest.raises(ValueError, match=match):
+        pbt.fit(_TINY_X, _TINY_Y, _TINY_X, _TINY_Y)
+
+
+def test_y_train_not_1d_raises() -> None:
+    with pytest.raises(ValueError, match="y_train must be 1-D"):
+        _short_pbt().fit(_TINY_X, _TINY_Y.reshape(-1, 1), _TINY_X, _TINY_Y)
+
+
+def test_y_val_not_1d_raises() -> None:
+    with pytest.raises(ValueError, match="y_val must be 1-D"):
+        _short_pbt().fit(_TINY_X, _TINY_Y, _TINY_X, _TINY_Y.reshape(-1, 1))
+
+
+def test_x_train_y_train_row_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="X_train and y_train"):
+        _short_pbt().fit(_TINY_X, _TINY_Y[:-1], _TINY_X, _TINY_Y)
+
+
+def test_x_val_y_val_row_mismatch_raises() -> None:
+    with pytest.raises(ValueError, match="X_val and y_val"):
+        _short_pbt().fit(_TINY_X, _TINY_Y, _TINY_X, _TINY_Y[:-1])
+
+
+# --- F14: per-member seed determinism ---------------------------------------------------------
+
+
+def test_member_seed_nondeterministic_when_random_state_none() -> None:
+    pbt = GeneticXGBClassifier(random_state=None)
+    rng = np.random.default_rng(0)
+    first = pbt._member_seed(0, 0, rng)
+    second = pbt._member_seed(0, 0, rng)
+    # Same generation/member but draws advance the rng -> different seeds.
+    assert first != second
+
+
+def test_member_seed_deterministic_when_random_state_set() -> None:
+    pbt = GeneticXGBClassifier(random_state=7)
+    a = pbt._member_seed(1, 2, np.random.default_rng(0))
+    b = pbt._member_seed(1, 2, np.random.default_rng(123))
+    # rng is ignored when random_state is set; the formula is reproducible.
+    assert a == b

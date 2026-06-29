@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
+from sklearn.exceptions import NotFittedError
 
 from genetic_xgb import GeneticXGBRegressor
 from genetic_xgb.search_space import default_regression_space
@@ -96,3 +98,32 @@ def test_early_stopping_records_best_iteration(regression_data) -> None:
     )
     assert reg.history_["best_iteration"].notna().all()
     assert reg.predict(regression_data.X_val).shape == (regression_data.X_val.shape[0],)
+
+
+def test_regressor_does_not_label_encode(regression_data) -> None:
+    # The regressor must NOT label-encode targets (no classes_ attribute is set).
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    assert not hasattr(reg, "classes_")
+
+
+def test_predict_before_fit_raises_not_fitted() -> None:
+    reg = GeneticXGBRegressor()
+    with pytest.raises(NotFittedError):
+        reg.predict(np.zeros((3, 4), dtype=np.float32))
+
+
+def test_invalid_hyperparams_raise_for_regressor(regression_data) -> None:
+    # The shared validation engine also guards the regressor (F5/F6).
+    reg = _short_reg(selection_top_k=6, population_size=6)
+    with pytest.raises(ValueError, match="disabling all evolution"):
+        reg.fit(
+            regression_data.X_train,
+            regression_data.y_train,
+            regression_data.X_val,
+            regression_data.y_val,
+        )

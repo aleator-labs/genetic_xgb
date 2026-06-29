@@ -198,6 +198,24 @@ def test_searchspace_mutate_changes_exactly_fraction_of_genes() -> None:
     assert mutated is not params
 
 
+def test_searchspace_mutate_tiny_positive_fraction_mutates_one_gene() -> None:
+    sp = _small_space()  # 4 genes
+    params = {"a": 5.0, "b": 5.0, "c": 5.0, "d": 50}
+    # round(0.1 * 4) == round(0.4) == 0, but a positive fraction must mutate >= 1 gene
+    mutated = sp.mutate(params, _rng(7), fraction=0.1, intensity=5.0, resample_prob=0.0)
+    changed = [name for name in params if mutated[name] != params[name]]
+    assert len(changed) == 1
+
+
+def test_searchspace_mutate_default_fraction_count_uses_round_not_ceil() -> None:
+    sp = default_classification_space()  # 11 core genes
+    params = sp.sample(_rng(0))
+    # round(0.3 * 11) == round(3.3) == 3 (ceil would wrongly give 4)
+    mutated = sp.mutate(params, _rng(0), fraction=0.3, intensity=5.0, resample_prob=0.0)
+    changed = [name for name in params if mutated[name] != params[name]]
+    assert len(changed) == 3
+
+
 def test_searchspace_mutate_zero_fraction_changes_nothing() -> None:
     sp = _small_space()
     params = {"a": 5.0, "b": 5.0, "c": 5.0, "d": 50}

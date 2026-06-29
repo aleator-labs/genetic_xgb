@@ -26,7 +26,21 @@ from sklearn.preprocessing import label_binarize
 
 @dataclass(frozen=True)
 class MetricSpec:
-    """Describes a metric: its name, direction, proba needs, and scorer fn."""
+    """Describes a metric: its name, direction, proba needs, and scorer fn.
+
+    ``needs_proba`` is *advisory* metadata only. It records whether the built-in
+    metric is naturally probability-based (e.g. ``logloss``/``roc_auc``) versus
+    label-based (e.g. ``accuracy``); it is **not** consulted by :meth:`score` and
+    does not transform the inputs. Callers that branch on probability vs. label
+    behaviour may read it, but nothing in this module relies on it.
+
+    Custom callable metrics registered via :func:`resolve_metric` receive the raw
+    model output unchanged: ``score()`` simply forwards the prediction array. For
+    classification that is the probability array (1-D ``P(class=1)`` for binary or
+    a 2-D ``(n, n_classes)`` matrix for multiclass); for regression it is the
+    vector of continuous predictions. The callable is responsible for any label
+    conversion it needs.
+    """
 
     name: str
     greater_is_better: bool
@@ -34,6 +48,8 @@ class MetricSpec:
     fn: Callable
 
     def score(self, y_true, proba) -> float:
+        # ``proba`` is forwarded to ``fn`` unchanged (only coerced to ndarray);
+        # see the class docstring for the contract on custom callables.
         return float(self.fn(y_true, np.asarray(proba)))
 
 
@@ -44,7 +60,12 @@ def _to_labels(proba):
 
 
 def _logloss(y_true, proba):
-    return log_loss(y_true, proba)
+    # Derive the label set from the proba shape so a validation split that is
+    # missing a class present in training (fewer classes in ``y_true`` than
+    # columns in ``proba``) does not crash. sklearn would otherwise infer the
+    # labels from ``y_true`` and reject the wider probability matrix.
+    labels = range(proba.shape[1]) if proba.ndim == 2 else [0, 1]
+    return log_loss(y_true, proba, labels=labels)
 
 
 def _accuracy(y_true, proba):
@@ -112,6 +133,11 @@ def resolve_metric(metric, greater_is_better=None, registry=None) -> MetricSpec:
 
     ``registry`` defaults to the classification :data:`METRICS`; the regressor passes
     :data:`REGRESSION_METRICS`.
+
+    A custom callable is wrapped in a :class:`MetricSpec` with ``needs_proba=False``
+    (advisory only). Regardless of that flag, the callable is invoked with the raw
+    model output: probabilities for classification, continuous predictions for
+    regression. See :class:`MetricSpec` for the full contract.
     """
     registry = METRICS if registry is None else registry
     if isinstance(metric, str):

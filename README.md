@@ -110,6 +110,28 @@ space = default_regression_space(extended=True)
 clf = GeneticXGBClassifier(search_space=space, ...)
 ```
 
+## Caveats / scope
+
+- **`best_score_` is an in-search selection score, not a test estimate.** Like the `best_score_` of
+  any HPO procedure (`GridSearchCV`, Optuna, ...), it is the best *validation* fitness reached
+  during the search and is therefore optimistically biased — the search selected for it. For an
+  unbiased estimate, evaluate the returned model on a **separate held-out test set** that was not
+  used as `X_val`/`y_val`.
+- **`best_params_` is the winning genome; it does not by itself reproduce `best_booster_`.** Because
+  crossover warm-starts the dominant parent's booster, the trained model is the product of a whole
+  warm-start lineage of hyperparameters, not a single `fit` with `best_params_`. To deploy the
+  evolved model, call `predict` / `predict_proba` (which use `best_booster_`); treat `best_params_`
+  as the final genome for inspection, not as a recipe to retrain `best_booster_` from scratch.
+- **`early_stopping_rounds` without `eval_metric` stops on XGBoost's objective default metric.** That
+  default may differ from the GA fitness `metric` (e.g. objective default `logloss` vs. fitness
+  `roc_auc`), so members can stop on a metric you are not optimizing. Set `eval_metric` to align
+  early stopping with the GA fitness metric.
+- **`scale_pos_weight` only affects binary classification.** It is ignored for regression and has no
+  defined meaning for multiclass objectives.
+- **The full stopped booster is kept.** With early stopping, `best_iteration` is recorded in
+  `history_` for insight only; the booster is **not** trimmed to `best_iteration`, so predictions
+  use all trees grown up to the stopping point.
+
 ## Development
 
 ```bash

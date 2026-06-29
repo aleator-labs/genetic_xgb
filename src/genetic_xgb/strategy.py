@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from genetic_xgb.member import PopulationMember
@@ -31,10 +32,14 @@ class GeneticStrategy:
         self.greater_is_better = greater_is_better
 
     def rank(self, members: list[PopulationMember]) -> list[PopulationMember]:
-        """Best-first ordering honoring direction; ``None`` scores sort last."""
+        """Best-first ordering honoring direction.
+
+        Members whose score is ``None`` or non-finite (``NaN`` / ``inf``) sort last
+        (treated as worst), so such a member can never win selection.
+        """
 
         def key(member: PopulationMember) -> tuple[int, float]:
-            if member.score is None:
+            if member.score is None or not math.isfinite(member.score):
                 return (1, 0.0)
             return (0, -member.score if self.greater_is_better else member.score)
 

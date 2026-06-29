@@ -66,6 +66,10 @@ class SearchSpace:
     def mutate(self, params, rng, fraction, intensity, resample_prob) -> dict:
         names = self.names()
         k = round(fraction * len(params))
+        # A positive fraction should always mutate at least one gene, even when
+        # rounding would otherwise floor it to zero.
+        if fraction > 0 and k == 0:
+            k = 1
         chosen = set(rng.choice(names, size=k, replace=False))
         new = dict(params)
         for name in names:
@@ -105,11 +109,18 @@ def _extended_genes() -> list[Hyperparameter]:
 
 
 def default_classification_space(extended: bool = False, imbalance: bool = False) -> SearchSpace:
-    """Build the default XGBoost classification search space."""
+    """Build the default XGBoost classification search space.
+
+    When ``imbalance`` is True a ``scale_pos_weight`` gene is added. Note that
+    ``scale_pos_weight`` is a *binary*-classification knob: it is effectively a
+    no-op for multiclass (``multi:softprob`` / ``multi:softmax``) objectives, so
+    enabling ``imbalance`` for a multiclass problem will tune a gene XGBoost ignores.
+    """
     params = _core_genes()
     if extended:
         params += _extended_genes()
     if imbalance:
+        # scale_pos_weight only affects binary objectives; ignored for multiclass.
         params.append(Hyperparameter("scale_pos_weight", "float", low=0.1, high=10, log=True))
     return SearchSpace(params)
 

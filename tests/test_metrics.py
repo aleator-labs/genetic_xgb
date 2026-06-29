@@ -85,6 +85,83 @@ def test_scorers_multiclass(multiclass_data):
     assert 0.0 <= _average_precision(y, p) <= 1.0
 
 
+# ----------------------- F3: missing-class robustness -----------------------
+
+
+def test_logloss_multiclass_validation_missing_class():
+    # proba has 3 columns (3 classes seen in training) but the validation
+    # ``y_true`` omits class 2. Before the fix sklearn inferred only {0, 1}
+    # from y_true and rejected the 3-column probability matrix.
+    proba = np.array(
+        [
+            [0.7, 0.2, 0.1],
+            [0.1, 0.8, 0.1],
+            [0.6, 0.3, 0.1],
+            [0.2, 0.7, 0.1],
+        ]
+    )
+    y_true = np.array([0, 1, 0, 1])  # class 2 missing
+    val = _logloss(y_true, proba)
+    assert val > 0
+
+
+def test_logloss_binary_validation_single_class():
+    # 1-D binary proba with a validation y_true that contains only class 0.
+    # labels=[0, 1] keeps log_loss well defined.
+    proba = np.array([0.2, 0.3, 0.1])
+    y_true = np.array([0, 0, 0])  # class 1 missing
+    val = _logloss(y_true, proba)
+    assert val >= 0
+
+
+def test_logloss_default_metric_score_missing_class():
+    # Exercise the same robustness through the public MetricSpec.score path,
+    # since ``logloss`` is the default classification metric.
+    proba = np.array(
+        [
+            [0.5, 0.3, 0.2],
+            [0.2, 0.6, 0.2],
+        ]
+    )
+    y_true = np.array([0, 1])  # class 2 missing
+    val = METRICS["logloss"].score(y_true, proba)
+    assert isinstance(val, float)
+    assert val > 0
+
+
+# ----------------------- F12: custom callable contract -----------------------
+
+
+def test_custom_callable_receives_raw_predictions():
+    # A custom callable must receive the raw model output unchanged (only
+    # coerced to ndarray) regardless of the advisory ``needs_proba`` flag.
+    captured = {}
+
+    def my_metric(y_true, pred):
+        captured["pred"] = pred
+        return float(np.mean(pred))
+
+    spec = resolve_metric(my_metric, greater_is_better=True)
+    assert spec.needs_proba is False  # advisory default for custom callables
+    proba = [0.1, 0.9, 0.5]
+    spec.score(np.array([0, 1, 1]), proba)
+    np.testing.assert_array_equal(captured["pred"], np.asarray(proba))
+
+
+def test_custom_callable_receives_2d_proba_unchanged():
+    captured = {}
+
+    def my_metric(y_true, pred):
+        captured["pred"] = pred
+        return 0.0
+
+    spec = resolve_metric(my_metric, greater_is_better=True)
+    proba = np.array([[0.7, 0.3], [0.2, 0.8]])
+    spec.score(np.array([0, 1]), proba)
+    np.testing.assert_array_equal(captured["pred"], proba)
+    assert captured["pred"].ndim == 2
+
+
 # ----------------------- registry tests -----------------------
 
 

@@ -85,6 +85,44 @@ def test_rank_none_scores_sort_last_both_directions() -> None:
     assert {m.id for m in ranked_lo[2:]} == {0, 2}
 
 
+def test_rank_non_finite_scores_sort_last_greater_is_better() -> None:
+    # inf would normally win for greater-is-better; non-finite must sort last instead.
+    members = [
+        _member(0, float("nan")),
+        _member(1, 0.5),
+        _member(2, float("inf")),
+        _member(3, 0.9),
+    ]
+    ranked = _strategy(greater_is_better=True).rank(members)
+    assert [m.id for m in ranked[:2]] == [3, 1]
+    assert {m.id for m in ranked[2:]} == {0, 2}
+
+
+def test_rank_non_finite_scores_sort_last_lower_is_better() -> None:
+    # -inf would normally win for lower-is-better; non-finite must sort last instead.
+    members = [
+        _member(0, float("-inf")),
+        _member(1, 0.5),
+        _member(2, float("nan")),
+        _member(3, 0.9),
+    ]
+    ranked = _strategy(greater_is_better=False).rank(members)
+    assert [m.id for m in ranked[:2]] == [1, 3]
+    assert {m.id for m in ranked[2:]} == {0, 2}
+
+
+def test_rank_all_finite_population_unaffected() -> None:
+    strat = _strategy(greater_is_better=True)
+    members = [_member(0, 0.1), _member(1, 0.9), _member(2, 0.5)]
+    assert [m.id for m in strat.rank(members)] == [1, 2, 0]
+
+
+def test_select_never_picks_nan_score_member() -> None:
+    strat = _strategy(top_k=1, greater_is_better=True)
+    members = [_member(0, float("nan")), _member(1, 0.3), _member(2, 0.1)]
+    assert [m.id for m in strat.select(members)] == [1]
+
+
 def test_rank_does_not_mutate_input_order() -> None:
     members = [_member(0, 0.1), _member(1, 0.9)]
     _strategy().rank(members)
