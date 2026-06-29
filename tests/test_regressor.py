@@ -232,3 +232,25 @@ def test_dataframe_column_reorder_gives_same_predictions(regression_data) -> Non
     assert list(reg.feature_names_in_) == names
     shuffled = df_val[names[::-1]]
     np.testing.assert_allclose(reg.predict(shuffled), reg.predict(df_val), rtol=0, atol=0)
+
+
+def test_fit_x_y_internal_split(regression_data) -> None:
+    # Regression uses an unstratified internal holdout when no validation set is given.
+    reg = _short_reg().fit(regression_data.X_train, regression_data.y_train)
+    assert reg.n_features_in_ == regression_data.X_train.shape[1]
+    assert reg.predict(regression_data.X_val).shape == (regression_data.X_val.shape[0],)
+
+
+def test_refit_full_with_sample_weight(regression_data) -> None:
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    x_all = np.vstack([regression_data.X_train, regression_data.X_val])
+    y_all = np.concatenate([regression_data.y_train, regression_data.y_val])
+    weights = np.ones(len(y_all), dtype=np.float32)
+    reg.refit_full(x_all, y_all, sample_weight=weights)
+    assert reg.refit_full_ is True
+    assert reg.predict(regression_data.X_val).shape == (regression_data.X_val.shape[0],)

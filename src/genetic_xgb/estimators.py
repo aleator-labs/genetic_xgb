@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 import xgboost as xgb
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.validation import _check_sample_weight, check_is_fitted, validate_data
 
@@ -52,6 +53,7 @@ class BaseGeneticXGB(BaseEstimator):
 
     _default_metric: str = "logloss"
     _metric_registry: dict = CLASSIFICATION_METRICS
+    _stratify_split: bool = True
 
     def __init__(
         self,
@@ -69,6 +71,7 @@ class BaseGeneticXGB(BaseEstimator):
         step_rounds: int = 10,
         early_stopping_rounds: int | None = None,
         eval_metric: str | None = None,
+        validation_fraction: float = 0.2,
         search_space: Any = None,
         strategy: Any = None,
         n_jobs: int = -1,
@@ -91,6 +94,7 @@ class BaseGeneticXGB(BaseEstimator):
         self.step_rounds = step_rounds
         self.early_stopping_rounds = early_stopping_rounds
         self.eval_metric = eval_metric
+        self.validation_fraction = validation_fraction
         self.search_space = search_space
         self.strategy = strategy
         self.n_jobs = n_jobs
@@ -132,6 +136,10 @@ class BaseGeneticXGB(BaseEstimator):
             raise ValueError(f"dominance_prob must be in [0, 1]; got {self.dominance_prob}.")
         if not 0.0 <= self.resample_prob <= 1.0:
             raise ValueError(f"resample_prob must be in [0, 1]; got {self.resample_prob}.")
+        if not 0.0 < self.validation_fraction < 1.0:
+            raise ValueError(
+                f"validation_fraction must be in (0, 1); got {self.validation_fraction}."
+            )
 
     def _validate_fit_inputs(self, X_train, y_train, X_val, y_val) -> None:  # noqa: N803
         """Check X/y shape agreement and that targets are 1-D (see F5)."""
@@ -189,8 +197,46 @@ class BaseGeneticXGB(BaseEstimator):
     def _default_space(self):
         raise NotImplementedError
 
-    def fit(self, X_train, y_train, X_val, y_val, sample_weight=None):  # noqa: N803
+    def _make_split(self, X, y, X_val, y_val, sample_weight):  # noqa: N803
+        """Resolve the train/validation split used for the genetic fitness signal.
+
+        When ``X_val``/``y_val`` are supplied they are used directly. When omitted,
+        an internal holdout of size ``validation_fraction`` is carved from
+        ``(X, y)`` (stratified for classification) so ``fit(X, y)`` works on its own.
+        Returns ``(X_train, y_train, X_val, y_val, sample_weight_train)``.
+        """
+        if X_val is not None:
+            return X, y, X_val, y_val, sample_weight
+        y_arr = np.asarray(y)
+        stratify = y_arr if self._stratify_split else None
+        if sample_weight is None:
+            X_tr, X_v, y_tr, y_v = train_test_split(  # noqa: N806
+                X,
+                y_arr,
+                test_size=self.validation_fraction,
+                random_state=self.random_state,
+                stratify=stratify,
+            )
+            return X_tr, y_tr, X_v, y_v, None
+        X_tr, X_v, y_tr, y_v, sw_tr, _ = train_test_split(  # noqa: N806
+            X,
+            y_arr,
+            np.asarray(sample_weight),
+            test_size=self.validation_fraction,
+            random_state=self.random_state,
+            stratify=stratify,
+        )
+        return X_tr, y_tr, X_v, y_v, sw_tr
+
+    def fit(self, X, y, X_val=None, y_val=None, sample_weight=None):  # noqa: N803
         self._validate_hyperparams()
+        if (X_val is None) != (y_val is None):
+            raise ValueError(
+                "Provide both X_val and y_val, or neither (to use an internal validation split)."
+            )
+        X_train, y_train, X_val, y_val, sample_weight = self._make_split(  # noqa: N806
+            X, y, X_val, y_val, sample_weight
+        )
         X_train = self._validate_X(X_train, reset=True)  # noqa: N806
         X_val = self._validate_X(X_val, reset=False)  # noqa: N806
         y_train = np.asarray(y_train)
@@ -333,6 +379,33 @@ class BaseGeneticXGB(BaseEstimator):
             importances /= total
         return importances
 
+    def _encode_y_for_refit(self, y):
+        """Prepare targets for :meth:`refit_full`. Base passes through (regression)."""
+        return np.asarray(y)
+
+    def refit_full(self, X, y, sample_weight=None):  # noqa: N803
+        """Train one XGBoost model on all of ``(X, y)`` from ``best_params_`` and deploy it.
+
+        This is the conventional "refit the winning configuration on all data" step
+        (e.g. train + validation combined, after the search picked a winner). The
+        result is a SINGLE-configuration model trained for the winning member's round
+        count -- it is NOT the evolved warm-start lineage -- and it REPLACES
+        ``best_booster_`` so ``predict`` / ``predict_proba`` use it. Sets
+        ``refit_full_ = True``. ``best_score_`` / ``best_params_`` still describe the
+        search and are unchanged.
+        """
+        check_is_fitted(self, "best_booster_")
+        X = self._validate_X(X, reset=False)  # noqa: N806
+        y_enc = self._encode_y_for_refit(y)
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X, dtype=np.float32)
+        params = {**self.base_params_, **self.best_params_}
+        dtrain = xgb.DMatrix(X, label=y_enc, weight=sample_weight)
+        booster = xgb.train(params, dtrain, num_boost_round=self.best_member_.n_rounds)
+        self.best_booster_ = bytes(booster.save_raw())
+        self.refit_full_ = True
+        return self
+
 
 class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
     """Evolve a population of XGBoost classifiers via a genetic algorithm.
@@ -393,6 +466,12 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
             return np.column_stack([1.0 - proba, proba])
         return proba
 
+    def _encode_y_for_refit(self, y):
+        """Encode refit targets with the classes learned during the search."""
+        encoder = LabelEncoder()
+        encoder.classes_ = self.classes_
+        return encoder.transform(np.asarray(y))
+
     def predict(self, X):  # noqa: N803
         encoded = self.predict_proba(X).argmax(axis=1)
         return self.classes_[encoded]
@@ -409,6 +488,7 @@ class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):
 
     _default_metric = "rmse"
     _metric_registry = REGRESSION_METRICS
+    _stratify_split = False
 
     def _make_base_params(self, y_train):  # noqa: N803
         return {

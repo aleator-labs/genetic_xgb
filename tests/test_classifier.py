@@ -396,3 +396,49 @@ def test_dataframe_missing_columns_raises_clear_error(binary_data) -> None:
     # Dropping a trained feature must raise a clear ValueError, not a raw KeyError.
     with pytest.raises(ValueError, match="missing"):
         pbt.predict(df_val.drop(columns=[names[0]]))
+
+
+def test_fit_x_y_internal_split(binary_data) -> None:
+    # fit(X, y) without an explicit validation set carves an internal stratified holdout.
+    clf = _short_pbt().fit(binary_data.X_train, binary_data.y_train)
+    assert clf.n_features_in_ == binary_data.X_train.shape[1]
+    assert clf.predict(binary_data.X_val).shape == (binary_data.X_val.shape[0],)
+
+
+def test_fit_internal_split_with_sample_weight(binary_data) -> None:
+    weights = np.ones(binary_data.y_train.shape[0], dtype=np.float32)
+    clf = _short_pbt().fit(binary_data.X_train, binary_data.y_train, sample_weight=weights)
+    assert clf.predict(binary_data.X_val).shape == (binary_data.X_val.shape[0],)
+
+
+def test_fit_partial_validation_args_raises(binary_data) -> None:
+    with pytest.raises(ValueError, match="both X_val and y_val"):
+        _short_pbt().fit(binary_data.X_train, binary_data.y_train, binary_data.X_val, None)
+
+
+def test_invalid_validation_fraction_raises(binary_data) -> None:
+    with pytest.raises(ValueError, match="validation_fraction"):
+        _short_pbt(validation_fraction=0.0).fit(binary_data.X_train, binary_data.y_train)
+
+
+def test_cross_val_score_runs(binary_data) -> None:
+    # fit(X, y) makes the estimator usable inside sklearn meta-estimators.
+    from sklearn.model_selection import cross_val_score
+
+    scores = cross_val_score(_short_pbt(), binary_data.X_train, binary_data.y_train, cv=2)
+    assert scores.shape == (2,)
+    assert np.all((scores >= 0.0) & (scores <= 1.0))
+
+
+def test_refit_full_replaces_booster_and_predicts(binary_data) -> None:
+    clf = _short_pbt().fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    before = clf.best_booster_
+    x_all = np.vstack([binary_data.X_train, binary_data.X_val])
+    y_all = np.concatenate([binary_data.y_train, binary_data.y_val])
+    clf.refit_full(x_all, y_all)
+    assert clf.refit_full_ is True
+    assert clf.best_booster_ != before  # deployed model retrained on all data
+    preds = clf.predict(binary_data.X_val)
+    assert set(np.unique(preds)).issubset(set(np.unique(y_all)))

@@ -134,28 +134,50 @@ clf = GeneticXGBClassifier(search_space=space, ...)
   before fitting raises `sklearn.exceptions.NotFittedError`.
 - **Missing values (`NaN`) are passed through to XGBoost**, preserving its native missing-value
   handling (inputs are not rejected for containing `NaN`).
+- **`fit(X, y)` works** (an internal validation split is used), so the estimators run inside
+  `Pipeline`, `cross_val_score`, and `GridSearchCV`; an explicit `fit(X_train, y_train, X_val, y_val)`
+  is also supported, and `refit_full(X, y)` retrains the winner on all data (see below).
 
-### The one deliberate deviation: `fit` requires an explicit validation set
+### Fitting: `fit(X, y)` or an explicit validation set
 
-Every other HPO estimator can hide the validation split inside `fit(X, y)`. This one cannot: the
-genetic search needs a **held-out fitness signal** every generation, so the validation set is part of
-the public `fit` signature:
+The genetic search needs a **held-out fitness signal** every generation. You can supply it two ways:
 
 ```python
-fit(X_train, y_train, X_val, y_val, sample_weight=None)
+# A. Plain sklearn-style fit — an internal stratified holdout (validation_fraction, default 0.2)
+#    is carved from (X, y) for the GA fitness signal.
+clf.fit(X, y)
+
+# B. Explicit, caller-controlled validation set (use your own split):
+clf.fit(X_train, y_train, X_val, y_val)
 ```
 
-The direct consequence is that these estimators do **not** drop into the vanilla sklearn
-meta-estimators that assume a two-argument `fit(X, y)`:
+Because `fit(X, y)` works, these estimators **drop into the standard sklearn meta-estimators**:
 
 - `sklearn.pipeline.Pipeline`
-- `sklearn.model_selection.GridSearchCV`
-- `sklearn.model_selection.RandomizedSearchCV`
-- `sklearn.model_selection.cross_val_score`
+- `sklearn.model_selection.cross_val_score` (each outer fold runs the full GA on its training part
+  with its own inner split — a genuinely unbiased estimate of the search procedure)
+- `sklearn.model_selection.GridSearchCV` / `RandomizedSearchCV` (tunes the GA's meta-knobs, e.g.
+  `mutation_fraction`, `population_size` — i.e. nested HPO; usually you only need this if you want to
+  search the search itself)
 
-This is **by design**, not an oversight — those tools would have to invent or re-split a validation
-set, which would defeat the point of an explicit, caller-controlled held-out signal. Everything that
-operates on a *fitted* estimator (introspection, `clone`, `score`, `predict`) still works normally.
+Control the internal split size with `validation_fraction`. Provide `X_val`/`y_val` when you want a
+fixed, caller-controlled split (e.g. a time-based holdout) instead of the random internal one.
+
+### Using all the data for the final model: `refit_full`
+
+After the search, train **one** XGBoost model on all of your data from the winning genome and deploy
+it:
+
+```python
+clf.fit(X_train, y_train, X_val, y_val)        # search
+clf.refit_full(X_all, y_all)                   # retrain best_params_ on train + val (all data)
+clf.predict(X_test)                            # now uses the refit, all-data model
+```
+
+`refit_full` trains a **single-configuration** model (the winning `best_params_`, for the winning
+member's round count) on everything you pass, replaces `best_booster_`, and sets `refit_full_ =
+True`. Note this is *not* the evolved warm-start lineage (which can't be replayed on new data) — it
+is the conventional "refit the best configuration on all data" step, like `GridSearchCV`'s `refit`.
 
 ### `feature_importances_` + `sample_weight`
 
