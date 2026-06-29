@@ -192,6 +192,52 @@ def test_early_stopping_with_explicit_eval_metric(binary_data):
     assert out["n_rounds"] >= 1
 
 
+def test_sample_weight_runs_and_returns_same_keys(binary_data):
+    weights = np.full(binary_data.y_train.shape[0], 2.0, dtype=np.float32)
+    out = train_step(
+        booster_bytes=None,
+        hyperparams=HP,
+        train=(binary_data.X_train, binary_data.y_train),
+        val=(binary_data.X_val, binary_data.y_val),
+        step_rounds=10,
+        metric=resolve_metric("logloss"),
+        base_params=BINARY_BASE,
+        seed=0,
+        sample_weight=weights,
+    )
+    assert set(out) == {"booster_bytes", "fitness", "n_rounds", "best_iteration"}
+    assert isinstance(out["booster_bytes"], bytes) and len(out["booster_bytes"]) > 0
+    assert isinstance(out["fitness"], float)
+    assert out["n_rounds"] == 10
+    booster = xgb.Booster()
+    booster.load_model(bytearray(out["booster_bytes"]))
+    proba = booster.predict(xgb.DMatrix(binary_data.X_val))
+    assert proba.shape == (binary_data.X_val.shape[0],)
+
+
+def test_skewed_sample_weight_changes_model_and_fitness(binary_data):
+    metric = resolve_metric("logloss")
+    train = (binary_data.X_train, binary_data.y_train)
+    val = (binary_data.X_val, binary_data.y_val)
+    common = {
+        "booster_bytes": None,
+        "hyperparams": HP,
+        "train": train,
+        "val": val,
+        "step_rounds": 15,
+        "metric": metric,
+        "base_params": BINARY_BASE,
+        "seed": 0,
+    }
+    unweighted = train_step(**common)
+    # Strongly skew weight toward one class so the fit is meaningfully different.
+    weights = np.where(binary_data.y_train == 1, 100.0, 1.0).astype(np.float32)
+    weighted = train_step(**common, sample_weight=weights)
+    # The skewed weights must actually take effect: model bytes and fitness differ.
+    assert weighted["booster_bytes"] != unweighted["booster_bytes"]
+    assert weighted["fitness"] != unweighted["fitness"]
+
+
 def test_early_stopping_no_leakage_on_adversarial_val():
     # Same reversed-signal probe, now WITH early stopping: still at/below chance.
     features, y = make_classification(

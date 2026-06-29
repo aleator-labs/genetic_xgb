@@ -12,8 +12,9 @@ from typing import Any
 
 import numpy as np
 import xgboost as xgb
-from sklearn.exceptions import NotFittedError
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.validation import _check_sample_weight, check_is_fitted, validate_data
 
 from genetic_xgb.executor import make_executor
 from genetic_xgb.history import History
@@ -26,7 +27,7 @@ from genetic_xgb.trainer import train_step
 _SEED_MOD = 2**31 - 1
 
 
-class BaseGeneticXGB:
+class BaseGeneticXGB(BaseEstimator):
     """Shared genetic-algorithm engine. Subclasses fill in the task-specific hooks.
 
     Fitted attributes (set by :meth:`fit`):
@@ -149,6 +150,25 @@ class BaseGeneticXGB:
                 f"got {X_val.shape[0]} and {y_val.shape[0]}."
             )
 
+    def _validate_X(self, X, *, reset: bool):  # noqa: N802, N803
+        """Validate ``X`` via sklearn, coercing to float32.
+
+        With ``reset=True`` (training) this records ``n_features_in_`` and, for a
+        pandas ``DataFrame``, ``feature_names_in_``. With ``reset=False``
+        (validation / prediction) the feature count is checked against the fitted
+        value and, when a ``DataFrame`` is supplied to a model fitted on named
+        columns, the columns are reordered to the training order so that a
+        column-permuted frame yields identical predictions.
+        """
+        if not reset and hasattr(self, "feature_names_in_") and hasattr(X, "columns"):
+            missing = [c for c in self.feature_names_in_ if c not in X.columns]
+            if missing:
+                raise ValueError(
+                    f"X is missing {len(missing)} feature(s) seen at fit time, e.g. {missing[:5]}"
+                )
+            X = X[list(self.feature_names_in_)]  # noqa: N806
+        return validate_data(self, X, dtype=np.float32, reset=reset)
+
     def _encode_targets(self, y_train, y_val):  # noqa: N803
         """Task-specific target preparation. Base engine passes targets through."""
         return y_train, y_val
@@ -168,13 +188,15 @@ class BaseGeneticXGB:
     def _default_space(self):
         raise NotImplementedError
 
-    def fit(self, X_train, y_train, X_val, y_val):  # noqa: N803
+    def fit(self, X_train, y_train, X_val, y_val, sample_weight=None):  # noqa: N803
         self._validate_hyperparams()
-        X_train = np.asarray(X_train, dtype=np.float32)  # noqa: N806
-        X_val = np.asarray(X_val, dtype=np.float32)  # noqa: N806
+        X_train = self._validate_X(X_train, reset=True)  # noqa: N806
+        X_val = self._validate_X(X_val, reset=False)  # noqa: N806
         y_train = np.asarray(y_train)
         y_val = np.asarray(y_val)
         self._validate_fit_inputs(X_train, y_train, X_val, y_val)
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X_train, dtype=np.float32)
         y_train, y_val = self._encode_targets(y_train, y_val)
 
         base = self._make_base_params(y_train)
@@ -228,6 +250,7 @@ class BaseGeneticXGB:
                     "seed": self._member_seed(generation, m.id, rng),
                     "early_stopping_rounds": self.early_stopping_rounds,
                     "eval_metric": self.eval_metric,
+                    "sample_weight": sample_weight,
                 }
                 for m in members
             ]
@@ -282,18 +305,35 @@ class BaseGeneticXGB:
         self.base_params_ = base
         return self
 
-    def _raw_predict(self, X):  # noqa: N803
-        if getattr(self, "best_booster_", None) is None:
-            raise NotFittedError(
-                f"This {type(self).__name__} is not fitted yet; call 'fit' before prediction."
-            )
-        X = np.asarray(X, dtype=np.float32)  # noqa: N806
+    def _load_booster(self) -> xgb.Booster:
         booster = xgb.Booster()
         booster.load_model(bytearray(self.best_booster_))
-        return booster.predict(xgb.DMatrix(X))
+        return booster
+
+    def _raw_predict(self, X):  # noqa: N803
+        check_is_fitted(self, "best_booster_")
+        X = self._validate_X(X, reset=False)  # noqa: N806
+        return self._load_booster().predict(xgb.DMatrix(X))
+
+    @property
+    def feature_importances_(self) -> np.ndarray:
+        """Gain-based importances, one per input feature, normalized to sum 1.
+
+        Features the winning booster never split on are zero-filled. Raises
+        :class:`~sklearn.exceptions.NotFittedError` before :meth:`fit`.
+        """
+        check_is_fitted(self, "best_booster_")
+        scores = self._load_booster().get_score(importance_type="gain")
+        importances = np.zeros(self.n_features_in_, dtype=np.float64)
+        for key, gain in scores.items():
+            importances[int(key[1:])] = gain
+        total = importances.sum()
+        if total > 0:
+            importances /= total
+        return importances
 
 
-class GeneticXGBClassifier(BaseGeneticXGB):
+class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
     """Evolve a population of XGBoost classifiers via a genetic algorithm.
 
     Class labels are label-encoded internally: arbitrary integer or string labels
@@ -357,7 +397,7 @@ class GeneticXGBClassifier(BaseGeneticXGB):
         return self.classes_[encoded]
 
 
-class GeneticXGBRegressor(BaseGeneticXGB):
+class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):
     """Evolve a population of XGBoost regressors via a genetic algorithm.
 
     Targets are used as-is (no label encoding). See :class:`BaseGeneticXGB` for

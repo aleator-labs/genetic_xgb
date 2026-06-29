@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
+from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 
 from genetic_xgb import GeneticXGBClassifier
@@ -265,3 +267,121 @@ def test_member_seed_deterministic_when_random_state_set() -> None:
     b = pbt._member_seed(1, 2, np.random.default_rng(123))
     # rng is ignored when random_state is set; the formula is reproducible.
     assert a == b
+
+
+# --- sklearn-compatibility battery -----------------------------------------------------------
+
+
+def test_clone_returns_unfitted_estimator_with_same_params() -> None:
+    pbt = _short_pbt(metric="accuracy", base_params={"max_bin": 64})
+    cloned = clone(pbt)
+    assert isinstance(cloned, GeneticXGBClassifier)
+    assert cloned is not pbt
+    # clone copies the constructor params verbatim and yields a fresh, unfitted estimator.
+    assert cloned.get_params() == pbt.get_params()
+    assert not hasattr(cloned, "best_booster_")
+
+
+def test_get_params_set_params_round_trip() -> None:
+    pbt = GeneticXGBClassifier()
+    pbt.set_params(population_size=9, metric="accuracy", random_state=3)
+    params = pbt.get_params()
+    assert params["population_size"] == 9
+    assert params["metric"] == "accuracy"
+    assert params["random_state"] == 3
+    # round-trip: feeding get_params back into a new estimator reproduces the params.
+    twin = GeneticXGBClassifier(**params)
+    assert twin.get_params() == params
+
+
+def test_score_returns_float_accuracy(binary_data) -> None:
+    pbt = _short_pbt(metric="accuracy").fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    score = pbt.score(binary_data.X_val, binary_data.y_val)
+    assert isinstance(score, float)
+    assert 0.0 <= score <= 1.0
+
+
+def test_feature_importances_shape_and_sum(binary_data) -> None:
+    pbt = _short_pbt().fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    importances = pbt.feature_importances_
+    assert importances.shape == (pbt.n_features_in_,)
+    assert importances.dtype == np.float64
+    # Real splits exist on cancer data, so the gains normalize to sum 1.
+    assert np.isclose(importances.sum(), 1.0)
+    assert np.all(importances >= 0.0)
+
+
+def test_feature_importances_all_zero_when_no_splits() -> None:
+    # Constant (all-zero) features give the booster nothing to split on: importances are all 0.
+    pbt = _short_pbt().fit(_TINY_X, _TINY_Y, _TINY_X, _TINY_Y)
+    importances = pbt.feature_importances_
+    assert importances.shape == (3,)
+    assert importances.sum() == 0.0
+
+
+def test_feature_importances_before_fit_raises() -> None:
+    with pytest.raises(NotFittedError):
+        _ = GeneticXGBClassifier().feature_importances_
+
+
+def test_n_features_in_recorded(binary_data) -> None:
+    pbt = _short_pbt().fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    assert pbt.n_features_in_ == binary_data.X_train.shape[1]
+
+
+def test_sample_weight_accepted_and_changes_fit(binary_data) -> None:
+    base = _short_pbt(metric="accuracy").fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    rng = np.random.default_rng(0)
+    weights = rng.uniform(0.1, 5.0, size=binary_data.X_train.shape[0]).astype(np.float32)
+    weighted = _short_pbt(metric="accuracy").fit(
+        binary_data.X_train,
+        binary_data.y_train,
+        binary_data.X_val,
+        binary_data.y_val,
+        sample_weight=weights,
+    )
+    # Per-row weights alter the training gradients, so the fitted boosters differ.
+    assert weighted.best_booster_ != base.best_booster_
+
+
+def test_predict_wrong_n_features_raises(binary_data) -> None:
+    pbt = _short_pbt().fit(
+        binary_data.X_train, binary_data.y_train, binary_data.X_val, binary_data.y_val
+    )
+    bad = binary_data.X_val[:, :-1]  # one feature short
+    with pytest.raises(ValueError, match="features"):
+        pbt.predict(bad)
+    with pytest.raises(ValueError, match="features"):
+        pbt.predict_proba(bad)
+
+
+def test_dataframe_column_reorder_gives_same_predictions(binary_data) -> None:
+    names = [f"col_{i}" for i in range(binary_data.X_train.shape[1])]
+    df_train = pd.DataFrame(binary_data.X_train, columns=names)
+    df_val = pd.DataFrame(binary_data.X_val, columns=names)
+    pbt = _short_pbt().fit(df_train, binary_data.y_train, df_val, binary_data.y_val)
+    assert list(pbt.feature_names_in_) == names
+    # A column-permuted frame must yield identical predictions (columns reordered internally).
+    shuffled = df_val[names[::-1]]
+    np.testing.assert_array_equal(pbt.predict(shuffled), pbt.predict(df_val))
+    np.testing.assert_allclose(
+        pbt.predict_proba(shuffled), pbt.predict_proba(df_val), rtol=0, atol=0
+    )
+
+
+def test_dataframe_missing_columns_raises_clear_error(binary_data) -> None:
+    names = [f"col_{i}" for i in range(binary_data.X_train.shape[1])]
+    df_train = pd.DataFrame(binary_data.X_train, columns=names)
+    df_val = pd.DataFrame(binary_data.X_val, columns=names)
+    pbt = _short_pbt().fit(df_train, binary_data.y_train, df_val, binary_data.y_val)
+    # Dropping a trained feature must raise a clear ValueError, not a raw KeyError.
+    with pytest.raises(ValueError, match="missing"):
+        pbt.predict(df_val.drop(columns=[names[0]]))

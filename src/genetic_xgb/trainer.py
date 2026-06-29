@@ -14,6 +14,7 @@ passed and the strict "validation never touches ``xgb.train``" path holds.
 
 from __future__ import annotations
 
+import numpy as np
 import xgboost as xgb
 
 from .metrics import MetricSpec
@@ -31,6 +32,7 @@ def train_step(
     seed: int,
     early_stopping_rounds: int | None = None,
     eval_metric: str | None = None,
+    sample_weight: np.ndarray | None = None,
 ) -> dict:
     """Train up to ``step_rounds`` boosting rounds and score on the validation split.
 
@@ -42,6 +44,10 @@ def train_step(
     recomputed on the validation predictions), ``n_rounds`` (total boosted rounds
     after this step), and ``best_iteration`` (where early stopping found the best
     score, or ``None`` when early stopping is disabled).
+
+    When ``sample_weight`` is provided, the training DMatrix is built with those
+    per-row weights (``xgb.DMatrix(X_train, label=y_train, weight=sample_weight)``);
+    the validation DMatrix is always unweighted.
     """
     X_train, y_train = train  # noqa: N806
     X_val, y_val = val  # noqa: N806
@@ -49,7 +55,7 @@ def train_step(
     params = {**base_params, **hyperparams, "seed": seed}
     if eval_metric is not None:
         params["eval_metric"] = eval_metric
-    dtrain = xgb.DMatrix(X_train, label=y_train)
+    dtrain = xgb.DMatrix(X_train, label=y_train, weight=sample_weight)
     dval = xgb.DMatrix(X_val, label=y_val)
     prev = None
     if booster_bytes is not None:

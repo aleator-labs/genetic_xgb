@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
+from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 
 from genetic_xgb import GeneticXGBRegressor
@@ -127,3 +129,106 @@ def test_invalid_hyperparams_raise_for_regressor(regression_data) -> None:
             regression_data.X_val,
             regression_data.y_val,
         )
+
+
+# --- sklearn-compatibility battery -----------------------------------------------------------
+
+
+def test_clone_returns_unfitted_estimator_with_same_params() -> None:
+    reg = _short_reg(metric="mae")
+    cloned = clone(reg)
+    assert isinstance(cloned, GeneticXGBRegressor)
+    assert cloned is not reg
+    assert cloned.get_params() == reg.get_params()
+    assert not hasattr(cloned, "best_booster_")
+
+
+def test_get_params_set_params_round_trip() -> None:
+    reg = GeneticXGBRegressor()
+    reg.set_params(population_size=8, metric="r2", random_state=5)
+    params = reg.get_params()
+    assert params["population_size"] == 8
+    assert params["metric"] == "r2"
+    twin = GeneticXGBRegressor(**params)
+    assert twin.get_params() == params
+
+
+def test_score_returns_float_r2(regression_data) -> None:
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    score = reg.score(regression_data.X_val, regression_data.y_val)
+    # RegressorMixin.score returns the R^2 coefficient of determination as a float.
+    assert isinstance(score, float)
+
+
+def test_feature_importances_shape_and_sum(regression_data) -> None:
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    importances = reg.feature_importances_
+    assert importances.shape == (reg.n_features_in_,)
+    assert importances.dtype == np.float64
+    assert np.isclose(importances.sum(), 1.0)
+    assert np.all(importances >= 0.0)
+
+
+def test_feature_importances_before_fit_raises() -> None:
+    with pytest.raises(NotFittedError):
+        _ = GeneticXGBRegressor().feature_importances_
+
+
+def test_n_features_in_recorded(regression_data) -> None:
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    assert reg.n_features_in_ == regression_data.X_train.shape[1]
+
+
+def test_sample_weight_accepted_and_changes_fit(regression_data) -> None:
+    base = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    rng = np.random.default_rng(0)
+    weights = rng.uniform(0.1, 5.0, size=regression_data.X_train.shape[0]).astype(np.float32)
+    weighted = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+        sample_weight=weights,
+    )
+    assert weighted.best_booster_ != base.best_booster_
+
+
+def test_predict_wrong_n_features_raises(regression_data) -> None:
+    reg = _short_reg().fit(
+        regression_data.X_train,
+        regression_data.y_train,
+        regression_data.X_val,
+        regression_data.y_val,
+    )
+    with pytest.raises(ValueError, match="features"):
+        reg.predict(regression_data.X_val[:, :-1])
+
+
+def test_dataframe_column_reorder_gives_same_predictions(regression_data) -> None:
+    names = [f"col_{i}" for i in range(regression_data.X_train.shape[1])]
+    df_train = pd.DataFrame(regression_data.X_train, columns=names)
+    df_val = pd.DataFrame(regression_data.X_val, columns=names)
+    reg = _short_reg().fit(df_train, regression_data.y_train, df_val, regression_data.y_val)
+    assert list(reg.feature_names_in_) == names
+    shuffled = df_val[names[::-1]]
+    np.testing.assert_allclose(reg.predict(shuffled), reg.predict(df_val), rtol=0, atol=0)

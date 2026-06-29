@@ -110,6 +110,68 @@ space = default_regression_space(extended=True)
 clf = GeneticXGBClassifier(search_space=space, ...)
 ```
 
+## scikit-learn compatibility
+
+`GeneticXGBClassifier` and `GeneticXGBRegressor` are real scikit-learn estimators. They subclass
+`sklearn.base.BaseEstimator` plus the matching mixin (`ClassifierMixin` for the classifier,
+`RegressorMixin` for the regressor), so the standard estimator API works out of the box:
+
+- **`get_params()` / `set_params()`** — all constructor arguments are plain stored attributes, so
+  introspection and re-parameterization behave as sklearn expects.
+- **`sklearn.base.clone()`** — produces an unfitted copy with the same hyperparameters.
+- **`score(X, y, sample_weight=None)`** — inherited from the mixin: **accuracy** for the classifier,
+  **R²** for the regressor. (Note this scores on whatever `(X, y)` you pass; it is independent of the
+  GA fitness `metric`.)
+- **`predict` / `predict_proba` shapes match XGBoost** — `predict` returns `(n_samples,)`;
+  `predict_proba` (classifier only) returns `(n_samples, n_classes)` with columns ordered to match
+  `classes_`.
+- **Fitted attributes exposed** — `classes_` (classifier), `n_features_in_`, `feature_names_in_`
+  (set when fitted from a DataFrame), and `feature_importances_` (read from `best_booster_`).
+- **`sample_weight` is supported** in `fit`; it weights the **training** objective only (the
+  validation fitness signal is left unweighted).
+- **Input validation** — `predict` / `predict_proba` raise if the input feature count or feature
+  names do not match what was seen at `fit` time; calling `predict` / `predict_proba` / `score`
+  before fitting raises `sklearn.exceptions.NotFittedError`.
+
+### The one deliberate deviation: `fit` requires an explicit validation set
+
+Every other HPO estimator can hide the validation split inside `fit(X, y)`. This one cannot: the
+genetic search needs a **held-out fitness signal** every generation, so the validation set is part of
+the public `fit` signature:
+
+```python
+fit(X_train, y_train, X_val, y_val, sample_weight=None)
+```
+
+The direct consequence is that these estimators do **not** drop into the vanilla sklearn
+meta-estimators that assume a two-argument `fit(X, y)`:
+
+- `sklearn.pipeline.Pipeline`
+- `sklearn.model_selection.GridSearchCV`
+- `sklearn.model_selection.RandomizedSearchCV`
+- `sklearn.model_selection.cross_val_score`
+
+This is **by design**, not an oversight — those tools would have to invent or re-split a validation
+set, which would defeat the point of an explicit, caller-controlled held-out signal. Everything that
+operates on a *fitted* estimator (introspection, `clone`, `score`, `predict`) still works normally.
+
+### `feature_importances_` + `sample_weight`
+
+```python
+import numpy as np
+from genetic_xgb import GeneticXGBClassifier
+
+# upweight a minority class without touching the search space
+sample_weight = np.where(y_train == 1, 5.0, 1.0)
+
+clf = GeneticXGBClassifier(metric="roc_auc", random_state=0)
+clf.fit(X_train, y_train, X_val, y_val, sample_weight=sample_weight)
+
+clf.feature_importances_     # (n_features_in_,), read from best_booster_
+clf.n_features_in_           # int
+clf.feature_names_in_        # present when X_train was a DataFrame
+```
+
 ## Caveats / scope
 
 - **`best_score_` is an in-search selection score, not a test estimate.** Like the `best_score_` of
