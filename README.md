@@ -1,8 +1,7 @@
 # genetic_xgb — Genetic-Algorithm Hyperparameter Optimization for XGBoost
 
-A small library that optimizes **XGBoost classifier and regressor** hyperparameters by **evolving a
-population of models with a genetic algorithm**, grounded in general evolutionary principles rather
-than any single paper.
+A library that optimizes **XGBoost classifier and regressor** hyperparameters by **evolving a
+population of models with a genetic algorithm**.
 
 Each individual carries a **genome** (its hyperparameters) and a **phenotype** (its trained
 booster). Every generation the population is grown a few boosting rounds (warm-start), scored on a
