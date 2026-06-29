@@ -167,7 +167,8 @@ class BaseGeneticXGB(BaseEstimator):
                     f"X is missing {len(missing)} feature(s) seen at fit time, e.g. {missing[:5]}"
                 )
             X = X[list(self.feature_names_in_)]  # noqa: N806
-        return validate_data(self, X, dtype=np.float32, reset=reset)
+        # ensure_all_finite=False keeps XGBoost's native missing-value (NaN) handling.
+        return validate_data(self, X, dtype=np.float32, ensure_all_finite=False, reset=reset)
 
     def _encode_targets(self, y_train, y_val):  # noqa: N803
         """Task-specific target preparation. Base engine passes targets through."""

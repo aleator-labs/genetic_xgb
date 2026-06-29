@@ -3,10 +3,11 @@
 // their findings, then runs one adversarial verifier per finding that re-checks it
 // against the actual code (and empirically tries drop-in scenarios).
 //
-// Run it (from a Claude session in this repo):
-//   Workflow({ name: "review-dropin" })
+// Run it (from a Claude session in this repo) via scriptPath — the `name` registry
+// does NOT resolve files under .claude/workflows/:
+//   Workflow({ scriptPath: ".claude/workflows/review-dropin.mjs" })
 // or against another repo:
-//   Workflow({ name: "review-dropin", args: { repo: "/abs/path/to/repo" } })
+//   Workflow({ scriptPath: ".claude/workflows/review-dropin.mjs", args: { repo: "/abs/path" } })
 
 export const meta = {
   name: 'review-dropin',

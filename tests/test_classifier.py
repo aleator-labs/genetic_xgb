@@ -377,6 +377,17 @@ def test_dataframe_column_reorder_gives_same_predictions(binary_data) -> None:
     )
 
 
+def test_nan_inputs_are_accepted_like_xgboost(binary_data) -> None:
+    # XGBoost treats NaN as missing; genetic_xgb must not reject it.
+    X_train = binary_data.X_train.copy()  # noqa: N806
+    X_train[0, 0] = np.nan
+    X_val = binary_data.X_val.copy()  # noqa: N806
+    X_val[0, 0] = np.nan
+    pbt = _short_pbt().fit(X_train, binary_data.y_train, X_val, binary_data.y_val)
+    preds = pbt.predict(X_val)  # predicting on NaN-containing data also works
+    assert preds.shape == (X_val.shape[0],)
+
+
 def test_dataframe_missing_columns_raises_clear_error(binary_data) -> None:
     names = [f"col_{i}" for i in range(binary_data.X_train.shape[1])]
     df_train = pd.DataFrame(binary_data.X_train, columns=names)

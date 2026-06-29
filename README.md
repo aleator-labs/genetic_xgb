@@ -132,6 +132,8 @@ clf = GeneticXGBClassifier(search_space=space, ...)
 - **Input validation** — `predict` / `predict_proba` raise if the input feature count or feature
   names do not match what was seen at `fit` time; calling `predict` / `predict_proba` / `score`
   before fitting raises `sklearn.exceptions.NotFittedError`.
+- **Missing values (`NaN`) are passed through to XGBoost**, preserving its native missing-value
+  handling (inputs are not rejected for containing `NaN`).
 
 ### The one deliberate deviation: `fit` requires an explicit validation set
 
@@ -217,4 +219,4 @@ blocks the push if anything fails. Enable it once per clone with
 
 `.claude/workflows/review-dropin.mjs` is a reusable review workflow: 5 independent reviewers →
 aggregate/de-duplicate → one adversarial verifier per finding. Run `/review-dropin` in a Claude
-Code session (or `Workflow({name: "review-dropin"})`).
+Code session (or `Workflow({scriptPath: ".claude/workflows/review-dropin.mjs"})`).
