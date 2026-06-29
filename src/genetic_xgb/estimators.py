@@ -8,6 +8,7 @@ registry, default search space, and prediction).
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 import numpy as np
@@ -72,6 +73,7 @@ class BaseGeneticXGB(BaseEstimator):
         early_stopping_rounds: int | None = None,
         eval_metric: str | None = None,
         validation_fraction: float = 0.2,
+        refit_on_full: bool = False,
         search_space: Any = None,
         strategy: Any = None,
         n_jobs: int = -1,
@@ -95,6 +97,7 @@ class BaseGeneticXGB(BaseEstimator):
         self.early_stopping_rounds = early_stopping_rounds
         self.eval_metric = eval_metric
         self.validation_fraction = validation_fraction
+        self.refit_on_full = refit_on_full
         self.search_space = search_space
         self.strategy = strategy
         self.n_jobs = n_jobs
@@ -228,12 +231,14 @@ class BaseGeneticXGB(BaseEstimator):
         )
         return X_tr, y_tr, X_v, y_v, sw_tr
 
-    def fit(self, X, y, X_val=None, y_val=None, sample_weight=None):  # noqa: N803
+    def fit(self, X, y, *, X_val=None, y_val=None, sample_weight=None):  # noqa: N803
         self._validate_hyperparams()
         if (X_val is None) != (y_val is None):
             raise ValueError(
                 "Provide both X_val and y_val, or neither (to use an internal validation split)."
             )
+        used_internal_split = X_val is None
+        full_sample_weight = sample_weight
         X_train, y_train, X_val, y_val, sample_weight = self._make_split(  # noqa: N806
             X, y, X_val, y_val, sample_weight
         )
@@ -350,6 +355,11 @@ class BaseGeneticXGB(BaseEstimator):
         self.best_member_ = best_member
         self.history_ = history.to_frame()
         self.base_params_ = base
+        self.refit_full_ = False
+        # When fit(X, y) used an internal holdout, optionally retrain the winner on ALL of
+        # (X, y) so the deployed model is not left trained on only (1 - validation_fraction).
+        if self.refit_on_full and used_internal_split:
+            self.refit_full(X, y, sample_weight=full_sample_weight)
         return self
 
     def _load_booster(self) -> xgb.Booster:
@@ -404,6 +414,43 @@ class BaseGeneticXGB(BaseEstimator):
         booster = xgb.train(params, dtrain, num_boost_round=self.best_member_.n_rounds)
         self.best_booster_ = bytes(booster.save_raw())
         self.refit_full_ = True
+        return self
+
+    def get_booster(self) -> xgb.Booster:
+        """Return the fitted XGBoost :class:`~xgboost.Booster` (the deployed model)."""
+        check_is_fitted(self, "best_booster_")
+        return self._load_booster()
+
+    def apply(self, X):  # noqa: N803
+        """Return the leaf index each sample falls into, per tree (XGBoost ``pred_leaf``)."""
+        return self._load_booster().predict(
+            xgb.DMatrix(self._validate_X(X, reset=False)), pred_leaf=True
+        )
+
+    def save_model(self, fname) -> None:
+        """Save the fitted booster in XGBoost's native format (JSON/UBJ by extension).
+
+        This writes only the booster (portable to other XGBoost tooling/languages); the
+        search artifacts (``best_params_``, ``history_``) and original class labels are not
+        included. Use :mod:`pickle` / :func:`joblib.dump` to persist the whole estimator.
+        """
+        self.get_booster().save_model(fname)
+
+    def _restore_after_load(self, booster: xgb.Booster) -> None:
+        """Hook to restore task-specific fitted state after :meth:`load_model`."""
+
+    def load_model(self, fname):
+        """Load a native XGBoost booster into this estimator for prediction.
+
+        Restores ``best_booster_`` and ``n_features_in_`` (and, for the classifier,
+        ``classes_`` as ``0..k-1``). Native models do not carry original (string /
+        non-0-based) labels; use :mod:`pickle` / :func:`joblib.load` for full fidelity.
+        """
+        booster = xgb.Booster()
+        booster.load_model(fname)
+        self.best_booster_ = bytes(booster.save_raw())
+        self.n_features_in_ = booster.num_features()
+        self._restore_after_load(booster)
         return self
 
 
@@ -471,6 +518,13 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
         encoder = LabelEncoder()
         encoder.classes_ = self.classes_
         return encoder.transform(np.asarray(y))
+
+    def _restore_after_load(self, booster):
+        """Recover class metadata from a natively loaded booster (labels become 0..k-1)."""
+        config = json.loads(booster.save_config())
+        num_class = int(config["learner"]["learner_model_param"]["num_class"])
+        self.n_classes_ = num_class if num_class > 0 else 2
+        self.classes_ = np.arange(self.n_classes_)
 
     def predict(self, X):  # noqa: N803
         encoded = self.predict_proba(X).argmax(axis=1)

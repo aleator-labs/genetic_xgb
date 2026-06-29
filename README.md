@@ -42,7 +42,7 @@ clf = GeneticXGBClassifier(
     step_rounds=10,            # boosting rounds added per generation
     n_jobs=-1, random_state=42,
 )
-clf.fit(X_train, y_train, X_val, y_val)
+clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)  # X_val / y_val are keyword-only
 
 clf.best_score_              # best validation fitness
 clf.best_params_            # winning hyperparameters
@@ -68,7 +68,7 @@ reg = GeneticXGBRegressor(
     step_rounds=10,
     n_jobs=-1, random_state=42,
 )
-reg.fit(X_train, y_train, X_val, y_val)
+reg.fit(X_train, y_train, X_val=X_val, y_val=y_val)  # X_val / y_val are keyword-only
 
 reg.best_score_             # best validation RMSE
 reg.predict(X_val)          # continuous predictions (no predict_proba)
@@ -127,16 +127,18 @@ clf = GeneticXGBClassifier(search_space=space, ...)
   `classes_`.
 - **Fitted attributes exposed** — `classes_` (classifier), `n_features_in_`, `feature_names_in_`
   (set when fitted from a DataFrame), and `feature_importances_` (read from `best_booster_`).
-- **`sample_weight` is supported** in `fit`; it weights the **training** objective only (the
-  validation fitness signal is left unweighted).
+- **`sample_weight` is supported** in `fit` (keyword-only); it weights the **training** objective
+  only (the validation fitness signal is left unweighted).
 - **Input validation** — `predict` / `predict_proba` raise if the input feature count or feature
   names do not match what was seen at `fit` time; calling `predict` / `predict_proba` / `score`
   before fitting raises `sklearn.exceptions.NotFittedError`.
 - **Missing values (`NaN`) are passed through to XGBoost**, preserving its native missing-value
   handling (inputs are not rejected for containing `NaN`).
 - **`fit(X, y)` works** (an internal validation split is used), so the estimators run inside
-  `Pipeline`, `cross_val_score`, and `GridSearchCV`; an explicit `fit(X_train, y_train, X_val, y_val)`
-  is also supported, and `refit_full(X, y)` retrains the winner on all data (see below).
+  `Pipeline`, `cross_val_score`, and `GridSearchCV`; an explicit
+  `fit(X_train, y_train, X_val=X_val, y_val=y_val)` is also supported (`X_val` / `y_val` /
+  `sample_weight` are **keyword-only**), and `refit_full(X, y)` retrains the winner on all data (see
+  below).
 
 ### Fitting: `fit(X, y)` or an explicit validation set
 
@@ -148,7 +150,8 @@ The genetic search needs a **held-out fitness signal** every generation. You can
 clf.fit(X, y)
 
 # B. Explicit, caller-controlled validation set (use your own split):
-clf.fit(X_train, y_train, X_val, y_val)
+#    X_val / y_val (and sample_weight) are keyword-only.
+clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
 ```
 
 Because `fit(X, y)` works, these estimators **drop into the standard sklearn meta-estimators**:
@@ -169,15 +172,59 @@ After the search, train **one** XGBoost model on all of your data from the winni
 it:
 
 ```python
-clf.fit(X_train, y_train, X_val, y_val)        # search
-clf.refit_full(X_all, y_all)                   # retrain best_params_ on train + val (all data)
-clf.predict(X_test)                            # now uses the refit, all-data model
+clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)  # search
+clf.refit_full(X_all, y_all)                          # retrain best_params_ on all data
+clf.predict(X_test)                                   # now uses the refit, all-data model
 ```
 
 `refit_full` trains a **single-configuration** model (the winning `best_params_`, for the winning
 member's round count) on everything you pass, replaces `best_booster_`, and sets `refit_full_ =
 True`. Note this is *not* the evolved warm-start lineage (which can't be replayed on new data) — it
 is the conventional "refit the best configuration on all data" step, like `GridSearchCV`'s `refit`.
+
+#### Automatic refit: `refit_on_full=True`
+
+When you call the plain `fit(X, y)` form (which carves out an internal `validation_fraction`
+holdout for the GA fitness signal), the deployed `best_booster_` is left trained on only
+`1 - validation_fraction` of your data. Construct the estimator with `refit_on_full=True` to have
+`fit` **automatically** call `refit_full(X, y)` on all of `(X, y)` once the search finishes (it sets
+`refit_full_ = True`):
+
+```python
+clf = GeneticXGBClassifier(refit_on_full=True, random_state=0)
+clf.fit(X, y)              # internal split for the GA, then auto-refit the winner on all of (X, y)
+clf.predict(X_test)        # uses the all-data model
+```
+
+`refit_on_full` only triggers for the internal-split `fit(X, y)` path; if you supply an explicit
+`X_val` / `y_val`, no automatic refit happens (call `refit_full` yourself if you want it). Any
+`sample_weight` you pass to `fit` is forwarded to the automatic refit.
+
+### Native XGBoost API: `get_booster`, `apply`, `save_model` / `load_model`
+
+The fitted estimator exposes the underlying booster and the usual native-XGBoost hooks:
+
+```python
+booster = clf.get_booster()       # the deployed xgb.Booster (the model predict/predict_proba use)
+leaves = clf.apply(X)             # per-tree leaf index each sample lands in (XGBoost pred_leaf)
+
+clf.save_model("model.json")      # native XGBoost format (.json / .ubj by extension)
+clf2 = GeneticXGBClassifier().load_model("model.json")  # restore for prediction
+clf2.predict(X_test)
+```
+
+`save_model` / `load_model` use **XGBoost's native format**, so the file is portable to other
+XGBoost tooling and languages — but it carries **only the booster**. It does **not** preserve the
+search artifacts (`best_params_`, `history_`, `best_member_`) or the original class labels: a
+classifier loaded this way exposes `classes_` as `0..k-1` (and `n_features_in_` from the booster),
+not your original/string labels. For **full fidelity**, persist the whole estimator with `pickle`
+or `joblib`, which round-trip every fitted attribute:
+
+```python
+import joblib
+joblib.dump(clf, "estimator.joblib")          # whole estimator: booster + labels + search artifacts
+clf = joblib.load("estimator.joblib")
+```
 
 ### `feature_importances_` + `sample_weight`
 
@@ -189,12 +236,32 @@ from genetic_xgb import GeneticXGBClassifier
 sample_weight = np.where(y_train == 1, 5.0, 1.0)
 
 clf = GeneticXGBClassifier(metric="roc_auc", random_state=0)
-clf.fit(X_train, y_train, X_val, y_val, sample_weight=sample_weight)
+# X_val / y_val / sample_weight are all keyword-only.
+clf.fit(X_train, y_train, X_val=X_val, y_val=y_val, sample_weight=sample_weight)
 
 clf.feature_importances_     # (n_features_in_,), read from best_booster_
 clf.n_features_in_           # int
 clf.feature_names_in_        # present when X_train was a DataFrame
 ```
+
+## Not a drop-in `XGBClassifier` / `XGBRegressor` rename
+
+These estimators expose a native-XGBoost-flavored surface (`get_booster`, `apply`, `save_model` /
+`load_model`, `feature_importances_`), but they are a **genetic-search wrapper**, not `XGBClassifier`
+/ `XGBRegressor` under a new name. The intended, deliberate differences:
+
+- **The constructor does not accept XGBoost hyperparameter names.** There is no `n_estimators`,
+  `max_depth`, `learning_rate`, `subsample`, etc. on the constructor, because the genetic algorithm
+  **searches** those genes. Pin a value you don't want searched via `base_params` (merged into every
+  member's booster params), and control which genes are searched and over what ranges via
+  `search_space`.
+- **One `fit()` trains many boosters.** A single `fit` runs roughly `population_size × generations`
+  booster trainings (the whole population, every generation), so it is far more compute than one
+  `XGBoost` fit — budget accordingly.
+- **XGBoost-specific `fit` / `predict` kwargs are not accepted.** `fit` takes only
+  `X, y, *, X_val, y_val, sample_weight` (no `eval_set` — supply the validation set via
+  `X_val` / `y_val`), and `predict` / `predict_proba` do not accept `output_margin`,
+  `iteration_range`, or `base_margin`.
 
 ## Caveats / scope
 
