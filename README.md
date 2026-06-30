@@ -109,6 +109,51 @@ space = default_regression_space(extended=True)
 clf = GeneticXGBClassifier(search_space=space, ...)
 ```
 
+## Feature selection
+
+Set `feature_selection=True` to **also evolve which features are used** — each member carries a
+boolean feature mask alongside its hyperparameters, recombined and mutated by the same genetic
+operators and scored by the same validation fitness (no separate feature-importance metric). The
+goal is to drop non-informative columns and reduce overfitting.
+
+```python
+clf = GeneticXGBClassifier(
+    feature_selection=True,
+    feature_init_prob=0.5,      # each member starts with ~50% of features
+    feature_mutation_rate=0.1,  # per-feature flip probability when mutating
+    min_features=1,             # never select fewer than this
+    random_state=0,
+)
+clf.fit(X_train, y_train)       # or fit(..., X_val=, y_val=)
+
+clf.get_support()               # boolean mask of selected features (len = n_features_in_)
+clf.get_support(indices=True)   # indices of selected features
+clf.feature_mask_               # the same mask (None when feature_selection is off)
+clf.feature_importances_        # zero on dropped features; nonzero only on selected ones
+clf.history_["n_features_selected"]   # how many features each member kept, per generation
+```
+
+`predict`/`predict_proba`/`refit_full` automatically restrict to the selected columns.
+
+**Does it actually help? Measure on a held-out test set** — the GA selects features against the
+validation fitness, so a subset can overfit `X_val` and not generalize. Verify the benefit on data
+the search never saw. Example (8 informative features + 60 pure-noise columns):
+
+```
+all-features  test accuracy: 0.882   (uses 68/68 features)
+selection     test accuracy: 0.910   (uses 29/68 features)
+```
+
+Selection shines when many features are uninformative. When most features carry signal it can
+*slightly hurt* (dropping useful columns by chance), so it is opt-in and should be validated per
+dataset. Note XGBoost's `colsample_bytree/bylevel/bynode` and `reg_alpha`/`reg_lambda` — already
+tuned by the GA — also damp noisy features; explicit selection complements them and is most
+valuable for *removing* columns outright (simpler model, fewer inputs to collect/serve).
+
+**Persistence:** with feature selection, `save_model`/`load_model` (native XGBoost format) is
+unsupported — the native booster cannot carry the mask. Use `pickle` / `joblib.dump`, which
+preserve `feature_mask_`.
+
 ## scikit-learn compatibility
 
 `GeneticXGBClassifier` and `GeneticXGBRegressor` are real scikit-learn estimators. They subclass

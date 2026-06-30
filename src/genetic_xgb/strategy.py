@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from genetic_xgb.feature_selection import crossover_masks, mutate_mask
 from genetic_xgb.member import PopulationMember
 from genetic_xgb.search_space import SearchSpace
 
@@ -22,6 +23,9 @@ class GeneticStrategy:
         mutation_intensity: float,
         resample_prob: float,
         greater_is_better: bool,
+        feature_selection: bool = False,
+        feature_mutation_rate: float = 0.1,
+        min_features: int = 1,
     ) -> None:
         self.space = space
         self.top_k = top_k
@@ -30,6 +34,9 @@ class GeneticStrategy:
         self.mutation_intensity = mutation_intensity
         self.resample_prob = resample_prob
         self.greater_is_better = greater_is_better
+        self.feature_selection = feature_selection
+        self.feature_mutation_rate = feature_mutation_rate
+        self.min_features = min_features
 
     def rank(self, members: list[PopulationMember]) -> list[PopulationMember]:
         """Best-first ordering honoring direction.
@@ -85,5 +92,15 @@ class GeneticStrategy:
                 pair = rng.choice(len(survivors), size=2, replace=False)
                 dominant, recessive = self.rank([survivors[int(pair[0])], survivors[int(pair[1])]])
             child_params = self.mutate(self.crossover(dominant, recessive, rng), rng)
-            slot.inherit_from(dominant, recessive, child_params)
+            child_mask = self._breed_mask(dominant, recessive, rng)
+            slot.inherit_from(dominant, recessive, child_params, feature_mask=child_mask)
         return sorted(members, key=lambda m: m.id)
+
+    def _breed_mask(self, dominant, recessive, rng):
+        """Recombine + mutate the feature mask (None when feature selection is off)."""
+        if not self.feature_selection:
+            return None
+        recombined = crossover_masks(
+            dominant.feature_mask, recessive.feature_mask, self.dominance_prob, rng
+        )
+        return mutate_mask(recombined, self.feature_mutation_rate, rng, self.min_features)
