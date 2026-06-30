@@ -20,8 +20,13 @@ class History:
                 "generation": generation,
                 "member_id": member.id,
                 "score": member.score,
+                "val_score": member.val_score,
+                "train_score": member.train_score,
                 "n_rounds": member.n_rounds,
                 "best_iteration": member.best_iteration,
+                "n_features_selected": (
+                    int(member.feature_mask.sum()) if member.feature_mask is not None else None
+                ),
                 "parents": member.parents,
             }
             row.update(member.hyperparams)

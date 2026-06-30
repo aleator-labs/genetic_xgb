@@ -33,6 +33,8 @@ def train_step(
     early_stopping_rounds: int | None = None,
     eval_metric: str | None = None,
     sample_weight: np.ndarray | None = None,
+    feature_mask: np.ndarray | None = None,
+    compute_train_fitness: bool = False,
 ) -> dict:
     """Train up to ``step_rounds`` boosting rounds and score on the validation split.
 
@@ -48,9 +50,17 @@ def train_step(
     When ``sample_weight`` is provided, the training DMatrix is built with those
     per-row weights (``xgb.DMatrix(X_train, label=y_train, weight=sample_weight)``);
     the validation DMatrix is always unweighted.
+
+    When ``feature_mask`` (a 1-D boolean array) is provided, only the selected columns
+    of ``X_train`` / ``X_val`` are used; the booster is trained on that subset. A
+    warm-start ``booster_bytes`` must have been trained on the same mask (the caller
+    guarantees this — see :meth:`PopulationMember.inherit_from`).
     """
     X_train, y_train = train  # noqa: N806
     X_val, y_val = val  # noqa: N806
+    if feature_mask is not None:
+        X_train = X_train[:, feature_mask]  # noqa: N806
+        X_val = X_val[:, feature_mask]  # noqa: N806
 
     params = {**base_params, **hyperparams, "seed": seed}
     if eval_metric is not None:
@@ -75,10 +85,16 @@ def train_step(
 
     proba = booster.predict(dval)  # full (stopped) booster — no iteration_range slicing
     fitness = metric.score(y_val, proba)
+    # Optional train-set fitness (same metric) so callers can measure the train-vs-validation
+    # overfit gap; computed only on request to avoid an extra predict per member otherwise.
+    train_fitness = None
+    if compute_train_fitness:
+        train_fitness = float(metric.score(y_train, booster.predict(dtrain)))
     best_it = booster.best_iteration if early_stopping_rounds is not None else None
     return {
         "booster_bytes": bytes(booster.save_raw()),
         "fitness": float(fitness),
+        "train_fitness": train_fitness,
         "n_rounds": booster.num_boosted_rounds(),
         "best_iteration": best_it,
     }

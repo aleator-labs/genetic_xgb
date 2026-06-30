@@ -19,6 +19,7 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.validation import _check_sample_weight, check_is_fitted, validate_data
 
 from genetic_xgb.executor import make_executor
+from genetic_xgb.feature_selection import sample_mask
 from genetic_xgb.history import History
 from genetic_xgb.member import PopulationMember
 from genetic_xgb.metrics import CLASSIFICATION_METRICS, REGRESSION_METRICS, resolve_metric
@@ -74,6 +75,11 @@ class BaseGeneticXGB(BaseEstimator):
         eval_metric: str | None = None,
         validation_fraction: float = 0.2,
         refit_on_full: bool = False,
+        feature_selection: bool = False,
+        feature_init_prob: float = 0.5,
+        feature_mutation_rate: float = 0.1,
+        min_features: int = 1,
+        overfit_penalty: float = 0.0,
         search_space: Any = None,
         strategy: Any = None,
         n_jobs: int = -1,
@@ -98,6 +104,11 @@ class BaseGeneticXGB(BaseEstimator):
         self.eval_metric = eval_metric
         self.validation_fraction = validation_fraction
         self.refit_on_full = refit_on_full
+        self.feature_selection = feature_selection
+        self.feature_init_prob = feature_init_prob
+        self.feature_mutation_rate = feature_mutation_rate
+        self.min_features = min_features
+        self.overfit_penalty = overfit_penalty
         self.search_space = search_space
         self.strategy = strategy
         self.n_jobs = n_jobs
@@ -143,6 +154,16 @@ class BaseGeneticXGB(BaseEstimator):
             raise ValueError(
                 f"validation_fraction must be in (0, 1); got {self.validation_fraction}."
             )
+        if not 0.0 < self.feature_init_prob <= 1.0:
+            raise ValueError(f"feature_init_prob must be in (0, 1]; got {self.feature_init_prob}.")
+        if not 0.0 <= self.feature_mutation_rate <= 1.0:
+            raise ValueError(
+                f"feature_mutation_rate must be in [0, 1]; got {self.feature_mutation_rate}."
+            )
+        if self.min_features < 1:
+            raise ValueError(f"min_features must be >= 1; got {self.min_features}.")
+        if self.overfit_penalty < 0:
+            raise ValueError(f"overfit_penalty must be >= 0; got {self.overfit_penalty}.")
 
     def _validate_fit_inputs(self, X_train, y_train, X_val, y_val) -> None:  # noqa: N803
         """Check X/y shape agreement and that targets are 1-D (see F5)."""
@@ -261,8 +282,14 @@ class BaseGeneticXGB(BaseEstimator):
         space = self.search_space or self._default_space()
 
         rng = np.random.default_rng(self.random_state)
+
+        def _initial_mask():
+            if not self.feature_selection:
+                return None
+            return sample_mask(self.n_features_in_, self.feature_init_prob, rng, self.min_features)
+
         members = [
-            PopulationMember(id=i, hyperparams=space.sample(rng))
+            PopulationMember(id=i, hyperparams=space.sample(rng), feature_mask=_initial_mask())
             for i in range(self.population_size)
         ]
 
@@ -274,6 +301,9 @@ class BaseGeneticXGB(BaseEstimator):
             mutation_intensity=self.mutation_intensity,
             resample_prob=self.resample_prob,
             greater_is_better=greater,
+            feature_selection=self.feature_selection,
+            feature_mutation_rate=self.feature_mutation_rate,
+            min_features=self.min_features,
         )
         executor = make_executor(self.executor, self.n_jobs)
 
@@ -289,6 +319,11 @@ class BaseGeneticXGB(BaseEstimator):
         train = (X_train, y_train)
         val = (X_val, y_val)
 
+        # Overfit-aware fitness (only when feature selection is on): penalize the train-vs-val
+        # generalization gap so subsets that overfit are not selected.
+        direction = 1.0 if greater else -1.0
+        compute_train = self.feature_selection and self.overfit_penalty > 0
+
         for generation in range(self.generations):
             args = [
                 {
@@ -303,15 +338,27 @@ class BaseGeneticXGB(BaseEstimator):
                     "early_stopping_rounds": self.early_stopping_rounds,
                     "eval_metric": self.eval_metric,
                     "sample_weight": sample_weight,
+                    "feature_mask": m.feature_mask,
+                    "compute_train_fitness": compute_train,
                 }
                 for m in members
             ]
             results = executor.map(train_step, args)
             for member, result in zip(members, results, strict=True):
                 member.booster_bytes = result["booster_bytes"]
-                member.score = result["fitness"]
                 member.n_rounds = result["n_rounds"]
                 member.best_iteration = result["best_iteration"]
+                val_fitness = result["fitness"]
+                if compute_train:
+                    train_fitness = result["train_fitness"]
+                    member.val_score = val_fitness
+                    member.train_score = train_fitness
+                    # ``direction * (train - val) > 0`` means train scores better than val,
+                    # i.e. overfitting; penalize it in the metric's native direction.
+                    overfit = max(0.0, direction * (train_fitness - val_fitness))
+                    member.score = val_fitness - direction * self.overfit_penalty * overfit
+                else:
+                    member.score = val_fitness
 
             history.record(generation, members)
 
@@ -353,6 +400,7 @@ class BaseGeneticXGB(BaseEstimator):
         self.best_params_ = best_params
         self.best_booster_ = best_bytes
         self.best_member_ = best_member
+        self.feature_mask_ = best_member.feature_mask
         self.history_ = history.to_frame()
         self.base_params_ = base
         self.refit_full_ = False
@@ -367,10 +415,26 @@ class BaseGeneticXGB(BaseEstimator):
         booster.load_model(bytearray(self.best_booster_))
         return booster
 
+    def _select_features(self, X):  # noqa: N803
+        """Restrict validated ``X`` to the selected feature columns (no-op if disabled)."""
+        mask = getattr(self, "feature_mask_", None)
+        return X if mask is None else X[:, mask]
+
     def _raw_predict(self, X):  # noqa: N803
         check_is_fitted(self, "best_booster_")
         X = self._validate_X(X, reset=False)  # noqa: N806
-        return self._load_booster().predict(xgb.DMatrix(X))
+        return self._load_booster().predict(xgb.DMatrix(self._select_features(X)))
+
+    def get_support(self, indices: bool = False):
+        """Return the selected-feature mask (or selected indices if ``indices=True``).
+
+        Without feature selection, all features are selected.
+        """
+        check_is_fitted(self, "best_booster_")
+        mask = self.feature_mask_
+        if mask is None:
+            mask = np.ones(self.n_features_in_, dtype=bool)
+        return np.flatnonzero(mask) if indices else mask
 
     @property
     def feature_importances_(self) -> np.ndarray:
@@ -382,8 +446,11 @@ class BaseGeneticXGB(BaseEstimator):
         check_is_fitted(self, "best_booster_")
         scores = self._load_booster().get_score(importance_type="gain")
         importances = np.zeros(self.n_features_in_, dtype=np.float64)
+        # Booster feature indices ``f{j}`` refer to the SELECTED columns; map them back
+        # to original feature positions through the mask (excluded features stay 0).
+        support = self.get_support(indices=True)
         for key, gain in scores.items():
-            importances[int(key[1:])] = gain
+            importances[support[int(key[1:])]] = gain
         total = importances.sum()
         if total > 0:
             importances /= total
@@ -410,7 +477,7 @@ class BaseGeneticXGB(BaseEstimator):
         if sample_weight is not None:
             sample_weight = _check_sample_weight(sample_weight, X, dtype=np.float32)
         params = {**self.base_params_, **self.best_params_}
-        dtrain = xgb.DMatrix(X, label=y_enc, weight=sample_weight)
+        dtrain = xgb.DMatrix(self._select_features(X), label=y_enc, weight=sample_weight)
         booster = xgb.train(params, dtrain, num_boost_round=self.best_member_.n_rounds)
         self.best_booster_ = bytes(booster.save_raw())
         self.refit_full_ = True
@@ -423,9 +490,8 @@ class BaseGeneticXGB(BaseEstimator):
 
     def apply(self, X):  # noqa: N803
         """Return the leaf index each sample falls into, per tree (XGBoost ``pred_leaf``)."""
-        return self._load_booster().predict(
-            xgb.DMatrix(self._validate_X(X, reset=False)), pred_leaf=True
-        )
+        x_sel = self._select_features(self._validate_X(X, reset=False))
+        return self._load_booster().predict(xgb.DMatrix(x_sel), pred_leaf=True)
 
     def save_model(self, fname) -> None:
         """Save the fitted booster in XGBoost's native format (JSON/UBJ by extension).
@@ -433,7 +499,17 @@ class BaseGeneticXGB(BaseEstimator):
         This writes only the booster (portable to other XGBoost tooling/languages); the
         search artifacts (``best_params_``, ``history_``) and original class labels are not
         included. Use :mod:`pickle` / :func:`joblib.dump` to persist the whole estimator.
+
+        Not supported when feature selection was used: the native booster carries only the
+        selected columns and no feature mask, so a reload could not restrict inputs and would
+        mispredict. Use pickle / joblib (which preserve ``feature_mask_``) instead.
         """
+        check_is_fitted(self, "best_booster_")
+        if getattr(self, "feature_mask_", None) is not None:
+            raise NotImplementedError(
+                "save_model is unsupported when feature_selection was used (the native format "
+                "cannot carry the feature mask). Use pickle / joblib.dump to persist the estimator."
+            )
         self.get_booster().save_model(fname)
 
     def _restore_after_load(self, booster: xgb.Booster) -> None:
