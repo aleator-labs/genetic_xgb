@@ -17,6 +17,8 @@ class PopulationMember:
     hyperparams: dict
     booster_bytes: bytes | None = None
     score: float | None = None
+    val_score: float | None = None
+    train_score: float | None = None
     n_rounds: int = 0
     best_iteration: int | None = None
     parents: tuple[int, int] | None = None
@@ -54,6 +56,8 @@ class PopulationMember:
         self.best_iteration = dominant.best_iteration
         self.parents = (dominant.id, recessive.id)
         self.score = None
+        self.val_score = None
+        self.train_score = None
         if feature_mask is not None:
             self.feature_mask = feature_mask
             if not np.array_equal(feature_mask, dominant.feature_mask):

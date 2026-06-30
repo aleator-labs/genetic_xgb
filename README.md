@@ -150,6 +150,21 @@ dataset. Note XGBoost's `colsample_bytree/bylevel/bynode` and `reg_alpha`/`reg_l
 tuned by the GA — also damp noisy features; explicit selection complements them and is most
 valuable for *removing* columns outright (simpler model, fewer inputs to collect/serve).
 
+### Overfit-aware fitness (`overfit_penalty`)
+
+By default a member is selected purely on its validation fitness. Set `overfit_penalty > 0` (only
+takes effect with `feature_selection=True`) to also penalize the **train-vs-validation gap**, so a
+subset that scores well on training but generalizes poorly is *not* preferred:
+
+```python
+clf = GeneticXGBClassifier(feature_selection=True, overfit_penalty=0.5, random_state=0)
+```
+
+The selection score becomes `val − overfit_penalty × max(0, train − val)` (direction-aware for
+lower-is-better metrics like logloss/rmse). The raw per-member train and validation scores are
+recorded in `history_["train_score"]` / `history_["val_score"]` so you can see the gap; with the
+penalty on, `best_score_` is this penalized selection score (not the raw validation score).
+
 **Persistence:** with feature selection, `save_model`/`load_model` (native XGBoost format) is
 unsupported — the native booster cannot carry the mask. Use `pickle` / `joblib.dump`, which
 preserve `feature_mask_`.

@@ -79,6 +79,7 @@ class BaseGeneticXGB(BaseEstimator):
         feature_init_prob: float = 0.5,
         feature_mutation_rate: float = 0.1,
         min_features: int = 1,
+        overfit_penalty: float = 0.0,
         search_space: Any = None,
         strategy: Any = None,
         n_jobs: int = -1,
@@ -107,6 +108,7 @@ class BaseGeneticXGB(BaseEstimator):
         self.feature_init_prob = feature_init_prob
         self.feature_mutation_rate = feature_mutation_rate
         self.min_features = min_features
+        self.overfit_penalty = overfit_penalty
         self.search_space = search_space
         self.strategy = strategy
         self.n_jobs = n_jobs
@@ -160,6 +162,8 @@ class BaseGeneticXGB(BaseEstimator):
             )
         if self.min_features < 1:
             raise ValueError(f"min_features must be >= 1; got {self.min_features}.")
+        if self.overfit_penalty < 0:
+            raise ValueError(f"overfit_penalty must be >= 0; got {self.overfit_penalty}.")
 
     def _validate_fit_inputs(self, X_train, y_train, X_val, y_val) -> None:  # noqa: N803
         """Check X/y shape agreement and that targets are 1-D (see F5)."""
@@ -315,6 +319,11 @@ class BaseGeneticXGB(BaseEstimator):
         train = (X_train, y_train)
         val = (X_val, y_val)
 
+        # Overfit-aware fitness (only when feature selection is on): penalize the train-vs-val
+        # generalization gap so subsets that overfit are not selected.
+        direction = 1.0 if greater else -1.0
+        compute_train = self.feature_selection and self.overfit_penalty > 0
+
         for generation in range(self.generations):
             args = [
                 {
@@ -330,15 +339,26 @@ class BaseGeneticXGB(BaseEstimator):
                     "eval_metric": self.eval_metric,
                     "sample_weight": sample_weight,
                     "feature_mask": m.feature_mask,
+                    "compute_train_fitness": compute_train,
                 }
                 for m in members
             ]
             results = executor.map(train_step, args)
             for member, result in zip(members, results, strict=True):
                 member.booster_bytes = result["booster_bytes"]
-                member.score = result["fitness"]
                 member.n_rounds = result["n_rounds"]
                 member.best_iteration = result["best_iteration"]
+                val_fitness = result["fitness"]
+                if compute_train:
+                    train_fitness = result["train_fitness"]
+                    member.val_score = val_fitness
+                    member.train_score = train_fitness
+                    # ``direction * (train - val) > 0`` means train scores better than val,
+                    # i.e. overfitting; penalize it in the metric's native direction.
+                    overfit = max(0.0, direction * (train_fitness - val_fitness))
+                    member.score = val_fitness - direction * self.overfit_penalty * overfit
+                else:
+                    member.score = val_fitness
 
             history.record(generation, members)
 

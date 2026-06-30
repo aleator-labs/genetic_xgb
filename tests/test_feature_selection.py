@@ -236,6 +236,41 @@ def test_regressor_feature_selection_and_refit_full() -> None:
     assert reg.predict(X).shape == (X.shape[0],)
 
 
+def test_overfit_penalty_records_train_and_val_scores() -> None:
+    X, y = _noisy_classification()  # noqa: N806
+    clf = GeneticXGBClassifier(
+        feature_selection=True,
+        overfit_penalty=0.5,
+        population_size=6,
+        selection_top_k=2,
+        generations=3,
+        step_rounds=5,
+        executor="sequential",
+        random_state=0,
+    ).fit(X, y)
+    # With the penalty active, every member records raw train and validation scores.
+    assert clf.history_["val_score"].notna().all()
+    assert clf.history_["train_score"].notna().all()
+    assert clf.predict(X).shape == (X.shape[0],)
+
+
+def test_overfit_penalty_ignored_without_feature_selection(binary_data) -> None:
+    # overfit_penalty only takes effect when feature_selection is on.
+    clf = GeneticXGBClassifier(
+        overfit_penalty=0.5,
+        population_size=4,
+        selection_top_k=2,
+        generations=2,
+        step_rounds=3,
+        executor="sequential",
+        random_state=0,
+    ).fit(
+        binary_data.X_train, binary_data.y_train, X_val=binary_data.X_val, y_val=binary_data.y_val
+    )
+    assert clf.history_["val_score"].isna().all()
+    assert clf.history_["train_score"].isna().all()
+
+
 def test_history_records_n_features_selected() -> None:
     X, y = _noisy_classification()  # noqa: N806
     clf = GeneticXGBClassifier(
@@ -274,6 +309,7 @@ def test_save_model_unsupported_with_feature_selection(tmp_path) -> None:
         ({"feature_mutation_rate": -0.1}, "feature_mutation_rate"),
         ({"feature_mutation_rate": 1.1}, "feature_mutation_rate"),
         ({"min_features": 0}, "min_features"),
+        ({"overfit_penalty": -0.1}, "overfit_penalty"),
     ],
 )
 def test_invalid_feature_selection_params_raise(kwargs, match) -> None:

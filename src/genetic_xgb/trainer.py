@@ -34,6 +34,7 @@ def train_step(
     eval_metric: str | None = None,
     sample_weight: np.ndarray | None = None,
     feature_mask: np.ndarray | None = None,
+    compute_train_fitness: bool = False,
 ) -> dict:
     """Train up to ``step_rounds`` boosting rounds and score on the validation split.
 
@@ -84,10 +85,16 @@ def train_step(
 
     proba = booster.predict(dval)  # full (stopped) booster — no iteration_range slicing
     fitness = metric.score(y_val, proba)
+    # Optional train-set fitness (same metric) so callers can measure the train-vs-validation
+    # overfit gap; computed only on request to avoid an extra predict per member otherwise.
+    train_fitness = None
+    if compute_train_fitness:
+        train_fitness = float(metric.score(y_train, booster.predict(dtrain)))
     best_it = booster.best_iteration if early_stopping_rounds is not None else None
     return {
         "booster_bytes": bytes(booster.save_raw()),
         "fitness": float(fitness),
+        "train_fitness": train_fitness,
         "n_rounds": booster.num_boosted_rounds(),
         "best_iteration": best_it,
     }

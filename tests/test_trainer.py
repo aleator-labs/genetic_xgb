@@ -38,12 +38,31 @@ def test_cold_start_produces_valid_booster(binary_data):
         base_params=BINARY_BASE,
         seed=0,
     )
-    assert set(out) == {"booster_bytes", "fitness", "n_rounds", "best_iteration"}
+    assert set(out) == {"booster_bytes", "fitness", "train_fitness", "n_rounds", "best_iteration"}
     assert isinstance(out["booster_bytes"], bytes) and len(out["booster_bytes"]) > 0
     assert isinstance(out["fitness"], float)
     assert out["n_rounds"] == 10
     # Early stopping off -> no best_iteration recorded.
     assert out["best_iteration"] is None
+    # Train fitness is only computed on request.
+    assert out["train_fitness"] is None
+
+
+def test_compute_train_fitness_returns_train_score(binary_data):
+    out = train_step(
+        booster_bytes=None,
+        hyperparams=HP,
+        train=(binary_data.X_train, binary_data.y_train),
+        val=(binary_data.X_val, binary_data.y_val),
+        step_rounds=15,
+        metric=resolve_metric("logloss"),
+        base_params=BINARY_BASE,
+        seed=0,
+        compute_train_fitness=True,
+    )
+    assert isinstance(out["train_fitness"], float)
+    # Train logloss is lower (better) than validation logloss for an overfitting model.
+    assert out["train_fitness"] < out["fitness"]
     # The returned bytes load into a usable booster.
     booster = xgb.Booster()
     booster.load_model(bytearray(out["booster_bytes"]))
@@ -205,7 +224,7 @@ def test_sample_weight_runs_and_returns_same_keys(binary_data):
         seed=0,
         sample_weight=weights,
     )
-    assert set(out) == {"booster_bytes", "fitness", "n_rounds", "best_iteration"}
+    assert set(out) == {"booster_bytes", "fitness", "train_fitness", "n_rounds", "best_iteration"}
     assert isinstance(out["booster_bytes"], bytes) and len(out["booster_bytes"]) > 0
     assert isinstance(out["fitness"], float)
     assert out["n_rounds"] == 10
