@@ -59,7 +59,7 @@ def test_pickle_roundtrip_preserves_bytes() -> None:
     m = PopulationMember(id=3, hyperparams={"lr": 0.1}, score=0.9, n_rounds=4)
     m.save_booster(booster)
 
-    restored = pickle.loads(pickle.dumps(m))
+    restored = pickle.loads(pickle.dumps(m))  # noqa: S301 -- trusted in-process round-trip, not untrusted input
     assert restored.id == 3
     assert restored.hyperparams == {"lr": 0.1}
     assert restored.score == 0.9
@@ -87,7 +87,9 @@ def test_inherit_from_copies_dominant_and_resets_score() -> None:
     assert child.parents == (2, 5)
     assert child.score is None
     # warm-started booster usable
-    assert child.load_booster().num_boosted_rounds() == 6
+    booster = child.load_booster()
+    assert booster is not None
+    assert booster.num_boosted_rounds() == 6
 
 
 def test_inherit_from_dominant_without_booster() -> None:

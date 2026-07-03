@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from sklearn.metrics import (
@@ -45,21 +46,21 @@ class MetricSpec:
     name: str
     greater_is_better: bool
     needs_proba: bool
-    fn: Callable
+    fn: Callable[..., Any]
 
-    def score(self, y_true, proba) -> float:
+    def score(self, y_true: np.ndarray, proba: np.ndarray) -> float:
         # ``proba`` is forwarded to ``fn`` unchanged (only coerced to ndarray);
         # see the class docstring for the contract on custom callables.
         return float(self.fn(y_true, np.asarray(proba)))
 
 
-def _to_labels(proba):
+def _to_labels(proba: np.ndarray) -> np.ndarray:
     if proba.ndim == 1:
         return (proba >= 0.5).astype(int)
     return proba.argmax(axis=1)
 
 
-def _logloss(y_true, proba):
+def _logloss(y_true: np.ndarray, proba: np.ndarray) -> Any:
     # Derive the label set from the proba shape so a validation split that is
     # missing a class present in training (fewer classes in ``y_true`` than
     # columns in ``proba``) does not crash. sklearn would otherwise infer the
@@ -68,22 +69,22 @@ def _logloss(y_true, proba):
     return log_loss(y_true, proba, labels=labels)
 
 
-def _accuracy(y_true, proba):
+def _accuracy(y_true: np.ndarray, proba: np.ndarray) -> Any:
     return accuracy_score(y_true, _to_labels(proba))
 
 
-def _roc_auc(y_true, proba):
+def _roc_auc(y_true: np.ndarray, proba: np.ndarray) -> Any:
     if proba.ndim == 1:
         return roc_auc_score(y_true, proba)
     return roc_auc_score(y_true, proba, multi_class="ovr")
 
 
-def _f1(y_true, proba):
+def _f1(y_true: np.ndarray, proba: np.ndarray) -> Any:
     average = "binary" if proba.ndim == 1 else "macro"
     return f1_score(y_true, _to_labels(proba), average=average)
 
 
-def _average_precision(y_true, proba):
+def _average_precision(y_true: np.ndarray, proba: np.ndarray) -> Any:
     if proba.ndim == 1:
         return average_precision_score(y_true, proba)
     classes = np.arange(proba.shape[1])
@@ -91,19 +92,19 @@ def _average_precision(y_true, proba):
     return average_precision_score(y_bin, proba, average="macro")
 
 
-def _rmse(y_true, pred):
+def _rmse(y_true: np.ndarray, pred: np.ndarray) -> Any:
     return np.sqrt(mean_squared_error(y_true, pred))
 
 
-def _mse(y_true, pred):
+def _mse(y_true: np.ndarray, pred: np.ndarray) -> Any:
     return mean_squared_error(y_true, pred)
 
 
-def _mae(y_true, pred):
+def _mae(y_true: np.ndarray, pred: np.ndarray) -> Any:
     return mean_absolute_error(y_true, pred)
 
 
-def _r2(y_true, pred):
+def _r2(y_true: np.ndarray, pred: np.ndarray) -> Any:
     return r2_score(y_true, pred)
 
 
@@ -128,7 +129,11 @@ REGRESSION_METRICS: dict[str, MetricSpec] = {
 CLASSIFICATION_METRICS = METRICS
 
 
-def resolve_metric(metric, greater_is_better=None, registry=None) -> MetricSpec:
+def resolve_metric(
+    metric: str | Callable[..., Any],
+    greater_is_better: bool | None = None,
+    registry: dict[str, MetricSpec] | None = None,
+) -> MetricSpec:
     """Resolve ``metric`` (a key in ``registry`` or a callable) to a :class:`MetricSpec`.
 
     ``registry`` defaults to the classification :data:`METRICS`; the regressor passes

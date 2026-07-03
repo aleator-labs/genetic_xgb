@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -15,17 +16,20 @@ from sklearn.exceptions import NotFittedError
 from genetic_xgb import GeneticXGBClassifier
 from genetic_xgb.search_space import default_classification_space
 
+if TYPE_CHECKING:
+    from conftest import Split
+
 _TINY_X = np.zeros((6, 3), dtype=np.float32)
 _TINY_Y = np.array([0, 1, 0, 1, 0, 1])
 
 
-def _nan_metric(y_true, proba) -> float:
+def _nan_metric(y_true: np.ndarray, proba: np.ndarray) -> float:
     """A metric that always returns NaN (used to exercise the no-finite-fitness guard)."""
     return float("nan")
 
 
-def _short_pbt(**overrides) -> GeneticXGBClassifier:
-    params = {
+def _short_pbt(**overrides: Any) -> GeneticXGBClassifier:
+    params: dict[str, Any] = {
         "population_size": 6,
         "generations": 4,
         "step_rounds": 5,
@@ -37,7 +41,7 @@ def _short_pbt(**overrides) -> GeneticXGBClassifier:
     return GeneticXGBClassifier(**params)
 
 
-def test_best_fitness_no_worse_than_generation_zero(binary_data) -> None:
+def test_best_fitness_no_worse_than_generation_zero(binary_data: Split) -> None:
     pbt = _short_pbt(metric="logloss").fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -52,7 +56,7 @@ def test_best_fitness_no_worse_than_generation_zero(binary_data) -> None:
         assert name in pbt.best_params_
 
 
-def test_sequential_reproducibility(binary_data) -> None:
+def test_sequential_reproducibility(binary_data: Split) -> None:
     a = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -69,7 +73,7 @@ def test_sequential_reproducibility(binary_data) -> None:
     assert a.best_params_ == b.best_params_
 
 
-def test_predict_proba_shape_and_rows_sum_to_one(binary_data) -> None:
+def test_predict_proba_shape_and_rows_sum_to_one(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -84,7 +88,7 @@ def test_predict_proba_shape_and_rows_sum_to_one(binary_data) -> None:
     assert set(np.unique(preds)).issubset({0, 1})
 
 
-def test_multiclass_path(multiclass_data) -> None:
+def test_multiclass_path(multiclass_data: Split) -> None:
     pbt = _short_pbt(metric="accuracy").fit(
         multiclass_data.X_train,
         multiclass_data.y_train,
@@ -99,7 +103,7 @@ def test_multiclass_path(multiclass_data) -> None:
     assert set(np.unique(preds)).issubset(set(range(multiclass_data.n_classes)))
 
 
-def test_history_rows_and_lineage_columns(binary_data) -> None:
+def test_history_rows_and_lineage_columns(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -114,7 +118,7 @@ def test_history_rows_and_lineage_columns(binary_data) -> None:
     assert pbt.history_["best_iteration"].isna().all()
 
 
-def test_target_fitness_triggers_early_stop(binary_data) -> None:
+def test_target_fitness_triggers_early_stop(binary_data: Split) -> None:
     # accuracy: greater is better; an easy target reachable in one generation.
     pbt = _short_pbt(metric="accuracy", generations=10, target_fitness=0.5).fit(
         binary_data.X_train,
@@ -124,10 +128,11 @@ def test_target_fitness_triggers_early_stop(binary_data) -> None:
     )
     generations_run = pbt.history_["generation"].nunique()
     assert generations_run < 10
+    assert pbt.best_score_ is not None
     assert pbt.best_score_ >= 0.5
 
 
-def test_patience_plateau_triggers_early_stop(binary_data) -> None:
+def test_patience_plateau_triggers_early_stop(binary_data: Split) -> None:
     # Impossible-to-beat min_delta forces a plateau immediately.
     pbt = _short_pbt(generations=10, patience=1, min_delta=1e9).fit(
         binary_data.X_train,
@@ -139,7 +144,7 @@ def test_patience_plateau_triggers_early_stop(binary_data) -> None:
     assert generations_run < 10
 
 
-def test_base_params_override_merges_into_booster_config(binary_data) -> None:
+def test_base_params_override_merges_into_booster_config(binary_data: Split) -> None:
     # Supplying base_params exercises the merge branch and must train a real model.
     pbt = _short_pbt(base_params={"max_bin": 64, "grow_policy": "lossguide"}).fit(
         binary_data.X_train,
@@ -152,7 +157,7 @@ def test_base_params_override_merges_into_booster_config(binary_data) -> None:
     assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-5)
 
 
-def test_early_stopping_records_best_iteration(binary_data) -> None:
+def test_early_stopping_records_best_iteration(binary_data: Split) -> None:
     # With early stopping on, every member records a non-null best_iteration and still predicts.
     pbt = _short_pbt(step_rounds=60, early_stopping_rounds=5).fit(
         binary_data.X_train,
@@ -168,7 +173,7 @@ def test_early_stopping_records_best_iteration(binary_data) -> None:
 # --- F1: label encoding round-trip ---------------------------------------------------------
 
 
-def test_string_labels_train_and_round_trip(multiclass_data) -> None:
+def test_string_labels_train_and_round_trip(multiclass_data: Split) -> None:
     names = np.array(["setosa", "versicolor", "virginica"])
     y_train = names[multiclass_data.y_train]
     y_val = names[multiclass_data.y_val]
@@ -187,7 +192,7 @@ def test_string_labels_train_and_round_trip(multiclass_data) -> None:
     assert np.array_equal(pbt.classes_[proba.argmax(axis=1)], preds)
 
 
-def test_noncontiguous_int_labels_round_trip(multiclass_data) -> None:
+def test_noncontiguous_int_labels_round_trip(multiclass_data: Split) -> None:
     mapping = np.array([10, 20, 30])
     y_train = mapping[multiclass_data.y_train]
     y_val = mapping[multiclass_data.y_val]
@@ -228,8 +233,24 @@ def test_predict_before_fit_raises_not_fitted() -> None:
 # --- F11: all-nonfinite fitness ---------------------------------------------------------------
 
 
-def test_all_nonfinite_fitness_raises_clear_error(binary_data) -> None:
+def test_all_nonfinite_fitness_raises_clear_error(binary_data: Split) -> None:
     pbt = _short_pbt(metric=_nan_metric, greater_is_better=False)
+    with pytest.raises(ValueError, match="finite fitness"):
+        pbt.fit(
+            binary_data.X_train,
+            binary_data.y_train,
+            X_val=binary_data.X_val,
+            y_val=binary_data.y_val,
+        )
+
+
+def test_all_nonfinite_fitness_with_target_fitness_raises_the_same_error(
+    binary_data: Split,
+) -> None:
+    # With target_fitness set and no finite score ever recorded, the target check must
+    # be skipped (best_score is still None) and fit must end with the clear ValueError,
+    # not a TypeError from comparing None against the target.
+    pbt = _short_pbt(metric=_nan_metric, greater_is_better=False, target_fitness=0.5)
     with pytest.raises(ValueError, match="finite fitness"):
         pbt.fit(
             binary_data.X_train,
@@ -256,7 +277,7 @@ def test_all_nonfinite_fitness_raises_clear_error(binary_data) -> None:
         ({"resample_prob": 1.5}, "resample_prob"),
     ],
 )
-def test_invalid_hyperparams_raise(kwargs, match) -> None:
+def test_invalid_hyperparams_raise(kwargs: dict[str, Any], match: str) -> None:
     pbt = _short_pbt(**kwargs)
     with pytest.raises(ValueError, match=match):
         pbt.fit(_TINY_X, _TINY_Y, X_val=_TINY_X, y_val=_TINY_Y)
@@ -327,7 +348,7 @@ def test_get_params_set_params_round_trip() -> None:
     assert twin.get_params() == params
 
 
-def test_score_returns_float_accuracy(binary_data) -> None:
+def test_score_returns_float_accuracy(binary_data: Split) -> None:
     pbt = _short_pbt(metric="accuracy").fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -339,7 +360,7 @@ def test_score_returns_float_accuracy(binary_data) -> None:
     assert 0.0 <= score <= 1.0
 
 
-def test_feature_importances_shape_and_sum(binary_data) -> None:
+def test_feature_importances_shape_and_sum(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -367,7 +388,7 @@ def test_feature_importances_before_fit_raises() -> None:
         _ = GeneticXGBClassifier().feature_importances_
 
 
-def test_n_features_in_recorded(binary_data) -> None:
+def test_n_features_in_recorded(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -377,7 +398,7 @@ def test_n_features_in_recorded(binary_data) -> None:
     assert pbt.n_features_in_ == binary_data.X_train.shape[1]
 
 
-def test_sample_weight_accepted_and_changes_fit(binary_data) -> None:
+def test_sample_weight_accepted_and_changes_fit(binary_data: Split) -> None:
     base = _short_pbt(metric="accuracy").fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -397,7 +418,7 @@ def test_sample_weight_accepted_and_changes_fit(binary_data) -> None:
     assert weighted.best_booster_ != base.best_booster_
 
 
-def test_predict_wrong_n_features_raises(binary_data) -> None:
+def test_predict_wrong_n_features_raises(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -411,7 +432,7 @@ def test_predict_wrong_n_features_raises(binary_data) -> None:
         pbt.predict_proba(bad)
 
 
-def test_dataframe_column_reorder_gives_same_predictions(binary_data) -> None:
+def test_dataframe_column_reorder_gives_same_predictions(binary_data: Split) -> None:
     names = [f"col_{i}" for i in range(binary_data.X_train.shape[1])]
     df_train = pd.DataFrame(binary_data.X_train, columns=names)
     df_val = pd.DataFrame(binary_data.X_val, columns=names)
@@ -425,7 +446,7 @@ def test_dataframe_column_reorder_gives_same_predictions(binary_data) -> None:
     )
 
 
-def test_nan_inputs_are_accepted_like_xgboost(binary_data) -> None:
+def test_nan_inputs_are_accepted_like_xgboost(binary_data: Split) -> None:
     # XGBoost treats NaN as missing; genetic_xgb must not reject it.
     X_train = binary_data.X_train.copy()  # noqa: N806
     X_train[0, 0] = np.nan
@@ -436,7 +457,7 @@ def test_nan_inputs_are_accepted_like_xgboost(binary_data) -> None:
     assert preds.shape == (X_val.shape[0],)
 
 
-def test_dataframe_missing_columns_raises_clear_error(binary_data) -> None:
+def test_dataframe_missing_columns_raises_clear_error(binary_data: Split) -> None:
     names = [f"col_{i}" for i in range(binary_data.X_train.shape[1])]
     df_train = pd.DataFrame(binary_data.X_train, columns=names)
     df_val = pd.DataFrame(binary_data.X_val, columns=names)
@@ -446,32 +467,32 @@ def test_dataframe_missing_columns_raises_clear_error(binary_data) -> None:
         pbt.predict(df_val.drop(columns=[names[0]]))
 
 
-def test_fit_x_y_internal_split(binary_data) -> None:
+def test_fit_x_y_internal_split(binary_data: Split) -> None:
     # fit(X, y) without an explicit validation set carves an internal stratified holdout.
     clf = _short_pbt().fit(binary_data.X_train, binary_data.y_train)
     assert clf.n_features_in_ == binary_data.X_train.shape[1]
     assert clf.predict(binary_data.X_val).shape == (binary_data.X_val.shape[0],)
 
 
-def test_fit_internal_split_with_sample_weight(binary_data) -> None:
+def test_fit_internal_split_with_sample_weight(binary_data: Split) -> None:
     weights = np.ones(binary_data.y_train.shape[0], dtype=np.float32)
     clf = _short_pbt().fit(binary_data.X_train, binary_data.y_train, sample_weight=weights)
     assert clf.predict(binary_data.X_val).shape == (binary_data.X_val.shape[0],)
 
 
-def test_fit_partial_validation_args_raises(binary_data) -> None:
+def test_fit_partial_validation_args_raises(binary_data: Split) -> None:
     with pytest.raises(ValueError, match="both X_val and y_val"):
         _short_pbt().fit(
             binary_data.X_train, binary_data.y_train, X_val=binary_data.X_val, y_val=None
         )
 
 
-def test_invalid_validation_fraction_raises(binary_data) -> None:
+def test_invalid_validation_fraction_raises(binary_data: Split) -> None:
     with pytest.raises(ValueError, match="validation_fraction"):
         _short_pbt(validation_fraction=0.0).fit(binary_data.X_train, binary_data.y_train)
 
 
-def test_cross_val_score_runs(binary_data) -> None:
+def test_cross_val_score_runs(binary_data: Split) -> None:
     # fit(X, y) makes the estimator usable inside sklearn meta-estimators.
     from sklearn.model_selection import cross_val_score
 
@@ -480,7 +501,7 @@ def test_cross_val_score_runs(binary_data) -> None:
     assert np.all((scores >= 0.0) & (scores <= 1.0))
 
 
-def test_refit_full_replaces_booster_and_predicts(binary_data) -> None:
+def test_refit_full_replaces_booster_and_predicts(binary_data: Split) -> None:
     clf = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -500,7 +521,7 @@ def test_refit_full_replaces_booster_and_predicts(binary_data) -> None:
 # --- new surface: booster access, apply, native save/load, refit_on_full, keyword-only --------
 
 
-def test_get_booster_returns_xgboost_booster(binary_data) -> None:
+def test_get_booster_returns_xgboost_booster(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -511,7 +532,7 @@ def test_get_booster_returns_xgboost_booster(binary_data) -> None:
     assert isinstance(booster, xgb.Booster)
 
 
-def test_apply_returns_2d_leaf_indices(binary_data) -> None:
+def test_apply_returns_2d_leaf_indices(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -523,7 +544,7 @@ def test_apply_returns_2d_leaf_indices(binary_data) -> None:
     assert len(leaves) == binary_data.X_val.shape[0]
 
 
-def test_save_load_model_binary_round_trip(binary_data) -> None:
+def test_save_load_model_binary_round_trip(binary_data: Split) -> None:
     pbt = _short_pbt().fit(
         binary_data.X_train,
         binary_data.y_train,
@@ -542,7 +563,7 @@ def test_save_load_model_binary_round_trip(binary_data) -> None:
     np.testing.assert_array_equal(fresh.predict(binary_data.X_val), expected)
 
 
-def test_save_load_model_multiclass_round_trip(multiclass_data) -> None:
+def test_save_load_model_multiclass_round_trip(multiclass_data: Split) -> None:
     pbt = _short_pbt(metric="accuracy").fit(
         multiclass_data.X_train,
         multiclass_data.y_train,
@@ -561,17 +582,18 @@ def test_save_load_model_multiclass_round_trip(multiclass_data) -> None:
     np.testing.assert_array_equal(fresh.predict(multiclass_data.X_val), expected)
 
 
-def test_refit_on_full_with_fit_x_y_sets_flag(binary_data) -> None:
+def test_refit_on_full_with_fit_x_y_sets_flag(binary_data: Split) -> None:
     # refit_on_full=True with fit(X, y) auto-retrains the winner on all of (X, y).
     clf = _short_pbt(refit_on_full=True).fit(binary_data.X_train, binary_data.y_train)
     assert clf.refit_full_ is True
     assert clf.predict(binary_data.X_val).shape == (binary_data.X_val.shape[0],)
 
 
-def test_fit_rejects_positional_validation_args(binary_data) -> None:
+def test_fit_rejects_positional_validation_args(binary_data: Split) -> None:
     # X_val/y_val/sample_weight are keyword-only: 4 positional args is a TypeError.
+    # mypy also flags this statically; ignore it because the runtime error is the point.
     with pytest.raises(TypeError):
-        _short_pbt().fit(
+        _short_pbt().fit(  # type: ignore[misc]
             binary_data.X_train,
             binary_data.y_train,
             binary_data.X_val,

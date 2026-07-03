@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
+
+import numpy as np
 
 
 @dataclass(frozen=True)
@@ -16,32 +18,48 @@ class Hyperparameter:
     low: float | None = None
     high: float | None = None
     log: bool = False
-    choices: tuple | None = None
+    choices: tuple[Any, ...] | None = None
 
-    def sample(self, rng) -> Any:
+    @property
+    def _choices(self) -> tuple[Any, ...]:
+        """``choices``, narrowed — always set for categorical genes."""
+        return cast("tuple[Any, ...]", self.choices)
+
+    @property
+    def _bounds(self) -> tuple[float, float]:
+        """``(low, high)``, narrowed — always set for float/int genes."""
+        return cast(float, self.low), cast(float, self.high)
+
+    def sample(self, rng: np.random.Generator) -> Any:
         if self.kind == "categorical":
-            return self.choices[int(rng.integers(len(self.choices)))]
+            choices = self._choices
+            return choices[int(rng.integers(len(choices)))]
+        low, high = self._bounds
         if self.log:
-            value = math.exp(rng.uniform(math.log(self.low), math.log(self.high)))
+            value = math.exp(rng.uniform(math.log(low), math.log(high)))
         else:
-            value = rng.uniform(self.low, self.high)
+            value = rng.uniform(low, high)
         if self.kind == "int":
             return self.clip(value)
         return value
 
-    def mutate(self, value, rng, intensity) -> Any:
+    def mutate(self, value: Any, rng: np.random.Generator, intensity: float) -> Any:
         if self.kind == "categorical":
-            return self.choices[int(rng.integers(len(self.choices)))]
+            choices = self._choices
+            return choices[int(rng.integers(len(choices)))]
+        low, high = self._bounds
         if self.log:
             value = value * math.exp(rng.normal(0, intensity))
         else:
-            value = value + rng.normal(0, intensity * (self.high - self.low))
+            value = value + rng.normal(0, intensity * (high - low))
         return self.clip(value)
 
-    def clip(self, value) -> Any:
+    def clip(self, value: Any) -> Any:
         if self.kind == "categorical":
-            return value if value in self.choices else self.choices[0]
-        clipped = min(max(value, self.low), self.high)
+            choices = self._choices
+            return value if value in choices else choices[0]
+        low, high = self._bounds
+        clipped = min(max(value, low), high)
         if self.kind == "int":
             return int(round(clipped))
         return clipped
@@ -57,13 +75,20 @@ class SearchSpace:
     def names(self) -> list[str]:
         return [p.name for p in self.params]
 
-    def sample(self, rng) -> dict[str, Any]:
+    def sample(self, rng: np.random.Generator) -> dict[str, Any]:
         return {p.name: p.sample(rng) for p in self.params}
 
-    def clip(self, params: dict) -> dict:
+    def clip(self, params: dict[str, Any]) -> dict[str, Any]:
         return {name: self._by_name[name].clip(value) for name, value in params.items()}
 
-    def mutate(self, params, rng, fraction, intensity, resample_prob) -> dict:
+    def mutate(
+        self,
+        params: dict[str, Any],
+        rng: np.random.Generator,
+        fraction: float,
+        intensity: float,
+        resample_prob: float,
+    ) -> dict[str, Any]:
         names = self.names()
         k = round(fraction * len(params))
         # A positive fraction should always mutate at least one gene, even when

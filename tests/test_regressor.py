@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -12,12 +13,13 @@ import xgboost as xgb
 from sklearn.base import clone
 from sklearn.exceptions import NotFittedError
 
+from conftest import RegSplit
 from genetic_xgb import GeneticXGBRegressor
 from genetic_xgb.search_space import default_regression_space
 
 
-def _short_reg(**overrides) -> GeneticXGBRegressor:
-    params = {
+def _short_reg(**overrides: Any) -> GeneticXGBRegressor:
+    params: dict[str, Any] = {
         "population_size": 6,
         "generations": 4,
         "step_rounds": 5,
@@ -29,7 +31,7 @@ def _short_reg(**overrides) -> GeneticXGBRegressor:
     return GeneticXGBRegressor(**params)
 
 
-def test_default_objective_and_metric(regression_data) -> None:
+def test_default_objective_and_metric(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -44,7 +46,7 @@ def test_default_objective_and_metric(regression_data) -> None:
         assert name in reg.best_params_
 
 
-def test_predict_returns_continuous_vector(regression_data) -> None:
+def test_predict_returns_continuous_vector(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -59,14 +61,14 @@ def test_predict_returns_continuous_vector(regression_data) -> None:
     assert not hasattr(reg, "predict_proba")
 
 
-def test_metric_override_mae_and_r2(regression_data) -> None:
+def test_metric_override_mae_and_r2(regression_data: RegSplit) -> None:
     mae = _short_reg(metric="mae").fit(
         regression_data.X_train,
         regression_data.y_train,
         X_val=regression_data.X_val,
         y_val=regression_data.y_val,
     )
-    assert mae.best_score_ >= 0.0
+    assert cast(float, mae.best_score_) >= 0.0
     # r2 exercises the greater-is-better direction in the regression registry.
     r2 = _short_reg(metric="r2").fit(
         regression_data.X_train,
@@ -78,7 +80,7 @@ def test_metric_override_mae_and_r2(regression_data) -> None:
     assert r2.best_score_ >= gen0_best_r2 - 1e-9
 
 
-def test_sequential_reproducibility(regression_data) -> None:
+def test_sequential_reproducibility(regression_data: RegSplit) -> None:
     a = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -95,7 +97,7 @@ def test_sequential_reproducibility(regression_data) -> None:
     assert a.best_params_ == b.best_params_
 
 
-def test_early_stopping_records_best_iteration(regression_data) -> None:
+def test_early_stopping_records_best_iteration(regression_data: RegSplit) -> None:
     reg = _short_reg(step_rounds=60, early_stopping_rounds=5).fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -106,7 +108,7 @@ def test_early_stopping_records_best_iteration(regression_data) -> None:
     assert reg.predict(regression_data.X_val).shape == (regression_data.X_val.shape[0],)
 
 
-def test_regressor_does_not_label_encode(regression_data) -> None:
+def test_regressor_does_not_label_encode(regression_data: RegSplit) -> None:
     # The regressor must NOT label-encode targets (no classes_ attribute is set).
     reg = _short_reg().fit(
         regression_data.X_train,
@@ -123,7 +125,7 @@ def test_predict_before_fit_raises_not_fitted() -> None:
         reg.predict(np.zeros((3, 4), dtype=np.float32))
 
 
-def test_invalid_hyperparams_raise_for_regressor(regression_data) -> None:
+def test_invalid_hyperparams_raise_for_regressor(regression_data: RegSplit) -> None:
     # The shared validation engine also guards the regressor (F5/F6).
     reg = _short_reg(selection_top_k=6, population_size=6)
     with pytest.raises(ValueError, match="disabling all evolution"):
@@ -157,7 +159,7 @@ def test_get_params_set_params_round_trip() -> None:
     assert twin.get_params() == params
 
 
-def test_score_returns_float_r2(regression_data) -> None:
+def test_score_returns_float_r2(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -169,7 +171,7 @@ def test_score_returns_float_r2(regression_data) -> None:
     assert isinstance(score, float)
 
 
-def test_feature_importances_shape_and_sum(regression_data) -> None:
+def test_feature_importances_shape_and_sum(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -188,7 +190,7 @@ def test_feature_importances_before_fit_raises() -> None:
         _ = GeneticXGBRegressor().feature_importances_
 
 
-def test_n_features_in_recorded(regression_data) -> None:
+def test_n_features_in_recorded(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -198,7 +200,7 @@ def test_n_features_in_recorded(regression_data) -> None:
     assert reg.n_features_in_ == regression_data.X_train.shape[1]
 
 
-def test_sample_weight_accepted_and_changes_fit(regression_data) -> None:
+def test_sample_weight_accepted_and_changes_fit(regression_data: RegSplit) -> None:
     base = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -217,7 +219,7 @@ def test_sample_weight_accepted_and_changes_fit(regression_data) -> None:
     assert weighted.best_booster_ != base.best_booster_
 
 
-def test_predict_wrong_n_features_raises(regression_data) -> None:
+def test_predict_wrong_n_features_raises(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -228,7 +230,7 @@ def test_predict_wrong_n_features_raises(regression_data) -> None:
         reg.predict(regression_data.X_val[:, :-1])
 
 
-def test_dataframe_column_reorder_gives_same_predictions(regression_data) -> None:
+def test_dataframe_column_reorder_gives_same_predictions(regression_data: RegSplit) -> None:
     names = [f"col_{i}" for i in range(regression_data.X_train.shape[1])]
     df_train = pd.DataFrame(regression_data.X_train, columns=names)
     df_val = pd.DataFrame(regression_data.X_val, columns=names)
@@ -240,14 +242,14 @@ def test_dataframe_column_reorder_gives_same_predictions(regression_data) -> Non
     np.testing.assert_allclose(reg.predict(shuffled), reg.predict(df_val), rtol=0, atol=0)
 
 
-def test_fit_x_y_internal_split(regression_data) -> None:
+def test_fit_x_y_internal_split(regression_data: RegSplit) -> None:
     # Regression uses an unstratified internal holdout when no validation set is given.
     reg = _short_reg().fit(regression_data.X_train, regression_data.y_train)
     assert reg.n_features_in_ == regression_data.X_train.shape[1]
     assert reg.predict(regression_data.X_val).shape == (regression_data.X_val.shape[0],)
 
 
-def test_refit_full_with_sample_weight(regression_data) -> None:
+def test_refit_full_with_sample_weight(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -265,7 +267,7 @@ def test_refit_full_with_sample_weight(regression_data) -> None:
 # --- new surface: booster access, apply, native save/load, keyword-only -----------------------
 
 
-def test_get_booster_returns_xgboost_booster(regression_data) -> None:
+def test_get_booster_returns_xgboost_booster(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -275,7 +277,7 @@ def test_get_booster_returns_xgboost_booster(regression_data) -> None:
     assert isinstance(reg.get_booster(), xgb.Booster)
 
 
-def test_apply_returns_2d_leaf_indices(regression_data) -> None:
+def test_apply_returns_2d_leaf_indices(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -287,7 +289,7 @@ def test_apply_returns_2d_leaf_indices(regression_data) -> None:
     assert len(leaves) == regression_data.X_val.shape[0]
 
 
-def test_save_load_model_round_trip(regression_data) -> None:
+def test_save_load_model_round_trip(regression_data: RegSplit) -> None:
     reg = _short_reg().fit(
         regression_data.X_train,
         regression_data.y_train,
@@ -304,10 +306,10 @@ def test_save_load_model_round_trip(regression_data) -> None:
     np.testing.assert_allclose(fresh.predict(regression_data.X_val), expected, rtol=0, atol=0)
 
 
-def test_fit_rejects_positional_validation_args(regression_data) -> None:
+def test_fit_rejects_positional_validation_args(regression_data: RegSplit) -> None:
     # X_val/y_val/sample_weight are keyword-only: 4 positional args is a TypeError.
     with pytest.raises(TypeError):
-        _short_reg().fit(
+        _short_reg().fit(  # type: ignore[misc]
             regression_data.X_train,
             regression_data.y_train,
             regression_data.X_val,

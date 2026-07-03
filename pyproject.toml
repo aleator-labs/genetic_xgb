@@ -18,6 +18,7 @@ dependencies = [
 dev = [
     "ipykernel>=7.3.0",
     "matplotlib>=3.11.0",
+    "mypy>=2.1.0",
     "nbconvert>=7.17.1",
     "pytest>=8",
     "pytest-cov>=5",
@@ -52,4 +53,15 @@ line-length = 100
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "N", "C4"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "N", "C4", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["xgboost.*", "sklearn.*", "joblib.*", "scipy.*", "pandas.*"]
+ignore_missing_imports = true

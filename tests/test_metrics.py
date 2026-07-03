@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import numpy as np
 import pytest
 import xgboost as xgb
 
+from conftest import RegSplit, Split
 from genetic_xgb.metrics import (
     METRICS,
     REGRESSION_METRICS,
@@ -22,7 +25,7 @@ from genetic_xgb.metrics import (
 )
 
 
-def _binary_proba(binary_data):
+def _binary_proba(binary_data: Split) -> tuple[np.ndarray, np.ndarray]:
     """Train a tiny real xgboost model and return canonical 1D P(class=1)."""
     dtrain = xgb.DMatrix(binary_data.X_train, label=binary_data.y_train)
     booster = xgb.train(
@@ -35,7 +38,7 @@ def _binary_proba(binary_data):
     return binary_data.y_val, proba
 
 
-def _multiclass_proba(multiclass_data):
+def _multiclass_proba(multiclass_data: Split) -> tuple[np.ndarray, np.ndarray]:
     """Train a tiny real xgboost model and return canonical 2D (n, k) proba."""
     dtrain = xgb.DMatrix(multiclass_data.X_train, label=multiclass_data.y_train)
     booster = xgb.train(
@@ -57,17 +60,17 @@ def _multiclass_proba(multiclass_data):
 # ----------------------- helper / scorer-level tests -----------------------
 
 
-def test_to_labels_binary():
+def test_to_labels_binary() -> None:
     proba = np.array([0.1, 0.6, 0.5, 0.49], dtype=np.float32)
     np.testing.assert_array_equal(_to_labels(proba), np.array([0, 1, 1, 0]))
 
 
-def test_to_labels_multiclass():
+def test_to_labels_multiclass() -> None:
     proba = np.array([[0.7, 0.2, 0.1], [0.1, 0.2, 0.7]], dtype=np.float32)
     np.testing.assert_array_equal(_to_labels(proba), np.array([0, 2]))
 
 
-def test_scorers_binary(binary_data):
+def test_scorers_binary(binary_data: Split) -> None:
     y, p = _binary_proba(binary_data)
     assert _logloss(y, p) > 0
     assert 0.0 <= _accuracy(y, p) <= 1.0
@@ -76,7 +79,7 @@ def test_scorers_binary(binary_data):
     assert 0.0 <= _average_precision(y, p) <= 1.0
 
 
-def test_scorers_multiclass(multiclass_data):
+def test_scorers_multiclass(multiclass_data: Split) -> None:
     y, p = _multiclass_proba(multiclass_data)
     assert _logloss(y, p) > 0
     assert 0.0 <= _accuracy(y, p) <= 1.0
@@ -88,7 +91,7 @@ def test_scorers_multiclass(multiclass_data):
 # ----------------------- F3: missing-class robustness -----------------------
 
 
-def test_logloss_multiclass_validation_missing_class():
+def test_logloss_multiclass_validation_missing_class() -> None:
     # proba has 3 columns (3 classes seen in training) but the validation
     # ``y_true`` omits class 2. Before the fix sklearn inferred only {0, 1}
     # from y_true and rejected the 3-column probability matrix.
@@ -105,7 +108,7 @@ def test_logloss_multiclass_validation_missing_class():
     assert val > 0
 
 
-def test_logloss_binary_validation_single_class():
+def test_logloss_binary_validation_single_class() -> None:
     # 1-D binary proba with a validation y_true that contains only class 0.
     # labels=[0, 1] keeps log_loss well defined.
     proba = np.array([0.2, 0.3, 0.1])
@@ -114,7 +117,7 @@ def test_logloss_binary_validation_single_class():
     assert val >= 0
 
 
-def test_logloss_default_metric_score_missing_class():
+def test_logloss_default_metric_score_missing_class() -> None:
     # Exercise the same robustness through the public MetricSpec.score path,
     # since ``logloss`` is the default classification metric.
     proba = np.array(
@@ -132,26 +135,27 @@ def test_logloss_default_metric_score_missing_class():
 # ----------------------- F12: custom callable contract -----------------------
 
 
-def test_custom_callable_receives_raw_predictions():
+def test_custom_callable_receives_raw_predictions() -> None:
     # A custom callable must receive the raw model output unchanged (only
     # coerced to ndarray) regardless of the advisory ``needs_proba`` flag.
-    captured = {}
+    captured: dict[str, Any] = {}
 
-    def my_metric(y_true, pred):
+    def my_metric(y_true: np.ndarray, pred: np.ndarray) -> float:
         captured["pred"] = pred
         return float(np.mean(pred))
 
     spec = resolve_metric(my_metric, greater_is_better=True)
     assert spec.needs_proba is False  # advisory default for custom callables
     proba = [0.1, 0.9, 0.5]
-    spec.score(np.array([0, 1, 1]), proba)
+    # Deliberately pass a plain list to exercise score()'s np.asarray coercion.
+    spec.score(np.array([0, 1, 1]), cast(np.ndarray, proba))
     np.testing.assert_array_equal(captured["pred"], np.asarray(proba))
 
 
-def test_custom_callable_receives_2d_proba_unchanged():
-    captured = {}
+def test_custom_callable_receives_2d_proba_unchanged() -> None:
+    captured: dict[str, Any] = {}
 
-    def my_metric(y_true, pred):
+    def my_metric(y_true: np.ndarray, pred: np.ndarray) -> float:
         captured["pred"] = pred
         return 0.0
 
@@ -165,7 +169,7 @@ def test_custom_callable_receives_2d_proba_unchanged():
 # ----------------------- registry tests -----------------------
 
 
-def test_registry_keys():
+def test_registry_keys() -> None:
     assert set(METRICS) == {
         "logloss",
         "accuracy",
@@ -185,7 +189,7 @@ def test_registry_keys():
         ("average_precision", True, True),
     ],
 )
-def test_registry_specs(name, gib, needs_proba):
+def test_registry_specs(name: str, gib: bool, needs_proba: bool) -> None:
     spec = METRICS[name]
     assert isinstance(spec, MetricSpec)
     assert spec.name == name
@@ -193,28 +197,28 @@ def test_registry_specs(name, gib, needs_proba):
     assert spec.needs_proba is needs_proba
 
 
-def test_metricspec_score_returns_float(binary_data):
+def test_metricspec_score_returns_float(binary_data: Split) -> None:
     y, p = _binary_proba(binary_data)
     val = METRICS["accuracy"].score(y, p)
     assert isinstance(val, float)
 
 
-def test_metricspec_score_accepts_list_proba():
+def test_metricspec_score_accepts_list_proba() -> None:
     # score() should np.asarray the proba arg, so a python list works.
     spec = METRICS["accuracy"]
-    val = spec.score(np.array([0, 1, 1]), [0.2, 0.9, 0.8])
+    val = spec.score(np.array([0, 1, 1]), cast(np.ndarray, [0.2, 0.9, 0.8]))
     assert val == 1.0
 
 
 # ----------------------- resolve_metric tests -----------------------
 
 
-def test_resolve_metric_str():
+def test_resolve_metric_str() -> None:
     spec = resolve_metric("roc_auc")
     assert spec is METRICS["roc_auc"]
 
 
-def test_resolve_metric_unknown_key():
+def test_resolve_metric_unknown_key() -> None:
     with pytest.raises(ValueError) as exc:
         resolve_metric("nope")
     msg = str(exc.value)
@@ -223,8 +227,8 @@ def test_resolve_metric_unknown_key():
         assert key in msg
 
 
-def test_resolve_metric_callable():
-    def my_metric(y_true, proba):
+def test_resolve_metric_callable() -> None:
+    def my_metric(y_true: np.ndarray, proba: np.ndarray) -> float:
         return 0.5
 
     spec = resolve_metric(my_metric, greater_is_better=True)
@@ -236,16 +240,16 @@ def test_resolve_metric_callable():
     assert spec.score(np.array([0, 1]), np.array([0.1, 0.9])) == 0.5
 
 
-def test_resolve_metric_callable_no_name():
+def test_resolve_metric_callable_no_name() -> None:
     spec = resolve_metric(lambda y, p: 1.0, greater_is_better=False)
     # lambda __name__ is "<lambda>" which exists; use a nameless-ish object instead
     assert spec.greater_is_better is False
     assert spec.score(np.array([0]), np.array([0.0])) == 1.0
 
 
-def test_resolve_metric_callable_object_without_name():
+def test_resolve_metric_callable_object_without_name() -> None:
     class Callable:
-        def __call__(self, y_true, proba):
+        def __call__(self, y_true: np.ndarray, proba: np.ndarray) -> float:
             return 0.25
 
     obj = Callable()
@@ -255,7 +259,7 @@ def test_resolve_metric_callable_object_without_name():
     assert spec.score(np.array([1]), np.array([0.9])) == 0.25
 
 
-def test_resolve_metric_callable_missing_gib():
+def test_resolve_metric_callable_missing_gib() -> None:
     with pytest.raises(ValueError):
         resolve_metric(lambda y, p: 0.0)
 
@@ -263,7 +267,7 @@ def test_resolve_metric_callable_missing_gib():
 # ----------------------- regression metric tests -----------------------
 
 
-def _regression_pred(regression_data):
+def _regression_pred(regression_data: RegSplit) -> tuple[np.ndarray, np.ndarray]:
     """Train a tiny real xgboost regressor and return continuous predictions."""
     dtrain = xgb.DMatrix(regression_data.X_train, label=regression_data.y_train)
     booster = xgb.train(
@@ -275,7 +279,7 @@ def _regression_pred(regression_data):
     return regression_data.y_val, pred
 
 
-def test_regression_scorers(regression_data):
+def test_regression_scorers(regression_data: RegSplit) -> None:
     y, pred = _regression_pred(regression_data)
     assert _mse(y, pred) > 0
     # rmse is the square root of mse.
@@ -284,19 +288,19 @@ def test_regression_scorers(regression_data):
     assert _r2(y, pred) <= 1.0
 
 
-def test_regression_registry_keys():
+def test_regression_registry_keys() -> None:
     assert set(REGRESSION_METRICS) == {"rmse", "mse", "mae", "r2"}
     assert REGRESSION_METRICS["rmse"].greater_is_better is False
     assert REGRESSION_METRICS["r2"].greater_is_better is True
     assert all(spec.needs_proba is False for spec in REGRESSION_METRICS.values())
 
 
-def test_resolve_metric_with_regression_registry():
+def test_resolve_metric_with_regression_registry() -> None:
     spec = resolve_metric("rmse", registry=REGRESSION_METRICS)
     assert spec is REGRESSION_METRICS["rmse"]
 
 
-def test_resolve_metric_unknown_key_in_regression_registry():
+def test_resolve_metric_unknown_key_in_regression_registry() -> None:
     with pytest.raises(ValueError) as exc:
         resolve_metric("logloss", registry=REGRESSION_METRICS)
     msg = str(exc.value)

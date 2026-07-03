@@ -14,7 +14,7 @@ class PopulationMember:
     """A single individual in the population (its genes + warm-start booster)."""
 
     id: int
-    hyperparams: dict
+    hyperparams: dict[str, Any]
     booster_bytes: bytes | None = None
     score: float | None = None
     val_score: float | None = None
@@ -60,7 +60,9 @@ class PopulationMember:
         self.train_score = None
         if feature_mask is not None:
             self.feature_mask = feature_mask
-            if not np.array_equal(feature_mask, dominant.feature_mask):
+            if dominant.feature_mask is None or not np.array_equal(
+                feature_mask, dominant.feature_mask
+            ):
                 self.booster_bytes = None
                 self.n_rounds = 0
                 self.best_iteration = None
