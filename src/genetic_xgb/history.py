@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 from genetic_xgb.member import PopulationMember
@@ -11,7 +13,7 @@ class History:
     """Collects one row per member per generation for later inspection."""
 
     def __init__(self) -> None:
-        self._rows: list[dict] = []
+        self._rows: list[dict[str, Any]] = []
 
     def record(self, generation: int, members: list[PopulationMember]) -> None:
         """Append one row per member capturing score, lineage and genes."""

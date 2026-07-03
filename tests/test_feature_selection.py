@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pytest
 import xgboost as xgb
 from sklearn.datasets import make_classification, make_regression
 
+from conftest import Split
 from genetic_xgb import GeneticXGBClassifier, GeneticXGBRegressor
 from genetic_xgb.feature_selection import (
     crossover_masks,
@@ -95,6 +99,7 @@ def test_inherit_from_changed_mask_resets_warm_start() -> None:
     assert child.booster_bytes is None
     assert child.n_rounds == 0
     assert child.best_iteration is None
+    assert child.feature_mask is not None
     assert np.array_equal(child.feature_mask, [False, True, True, False])
 
 
@@ -117,7 +122,7 @@ def test_inherit_from_same_mask_keeps_warm_start() -> None:
 # --------------------------- trainer.train_step with a mask ---------------------------
 
 
-def test_train_step_uses_only_selected_columns(binary_data) -> None:
+def test_train_step_uses_only_selected_columns(binary_data: Split) -> None:
     mask = np.zeros(binary_data.X_train.shape[1], dtype=bool)
     mask[:3] = True  # keep 3 columns
     out = train_step(
@@ -184,7 +189,7 @@ def test_evolve_breeds_masks_and_cold_starts_changed_offspring() -> None:
 # --------------------------- estimator integration ---------------------------
 
 
-def _noisy_classification():
+def _noisy_classification() -> tuple[np.ndarray, np.ndarray]:
     X, y = make_classification(  # noqa: N806
         n_samples=500, n_features=20, n_informative=5, n_redundant=0, random_state=0
     )
@@ -254,7 +259,7 @@ def test_overfit_penalty_records_train_and_val_scores() -> None:
     assert clf.predict(X).shape == (X.shape[0],)
 
 
-def test_overfit_penalty_ignored_without_feature_selection(binary_data) -> None:
+def test_overfit_penalty_ignored_without_feature_selection(binary_data: Split) -> None:
     # overfit_penalty only takes effect when feature_selection is on.
     clf = GeneticXGBClassifier(
         overfit_penalty=0.5,
@@ -286,7 +291,7 @@ def test_history_records_n_features_selected() -> None:
     assert clf.history_["n_features_selected"].between(1, 20).all()
 
 
-def test_save_model_unsupported_with_feature_selection(tmp_path) -> None:
+def test_save_model_unsupported_with_feature_selection(tmp_path: Path) -> None:
     X, y = _noisy_classification()  # noqa: N806
     clf = GeneticXGBClassifier(
         feature_selection=True,
@@ -312,7 +317,7 @@ def test_save_model_unsupported_with_feature_selection(tmp_path) -> None:
         ({"overfit_penalty": -0.1}, "overfit_penalty"),
     ],
 )
-def test_invalid_feature_selection_params_raise(kwargs, match) -> None:
+def test_invalid_feature_selection_params_raise(kwargs: dict[str, Any], match: str) -> None:
     X, y = _noisy_classification()  # noqa: N806
     est = GeneticXGBClassifier(
         feature_selection=True,
@@ -328,7 +333,7 @@ def test_invalid_feature_selection_params_raise(kwargs, match) -> None:
         est.fit(X, y)
 
 
-def test_feature_selection_off_keeps_all_features(binary_data) -> None:
+def test_feature_selection_off_keeps_all_features(binary_data: Split) -> None:
     clf = GeneticXGBClassifier(
         population_size=4,
         selection_top_k=2,

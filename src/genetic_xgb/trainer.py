@@ -14,6 +14,8 @@ passed and the strict "validation never touches ``xgb.train``" path holds.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import xgboost as xgb
 
@@ -23,19 +25,19 @@ from .metrics import MetricSpec
 def train_step(
     *,
     booster_bytes: bytes | None,
-    hyperparams: dict,
-    train: tuple,
-    val: tuple,
+    hyperparams: dict[str, Any],
+    train: tuple[np.ndarray, np.ndarray],
+    val: tuple[np.ndarray, np.ndarray],
     step_rounds: int,
     metric: MetricSpec,
-    base_params: dict,
+    base_params: dict[str, Any],
     seed: int,
     early_stopping_rounds: int | None = None,
     eval_metric: str | None = None,
     sample_weight: np.ndarray | None = None,
     feature_mask: np.ndarray | None = None,
     compute_train_fitness: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """Train up to ``step_rounds`` boosting rounds and score on the validation split.
 
     With ``early_stopping_rounds`` set, ``step_rounds`` becomes an upper bound: the

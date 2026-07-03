@@ -11,14 +11,14 @@ from joblib import Parallel, delayed
 class Executor:
     """Maps a function over a sequence of keyword-argument dicts, in order."""
 
-    def map(self, fn: Callable, arg_dicts: list[dict[str, Any]]) -> list:
+    def map(self, fn: Callable[..., Any], arg_dicts: list[dict[str, Any]]) -> list[Any]:
         raise NotImplementedError
 
 
 class SequentialExecutor(Executor):
     """Runs each call in-process, one after another."""
 
-    def map(self, fn: Callable, arg_dicts: list[dict[str, Any]]) -> list:
+    def map(self, fn: Callable[..., Any], arg_dicts: list[dict[str, Any]]) -> list[Any]:
         return [fn(**a) for a in arg_dicts]
 
 
@@ -28,7 +28,7 @@ class JoblibExecutor(Executor):
     def __init__(self, n_jobs: int = -1) -> None:
         self.n_jobs = n_jobs
 
-    def map(self, fn: Callable, arg_dicts: list[dict[str, Any]]) -> list:
+    def map(self, fn: Callable[..., Any], arg_dicts: list[dict[str, Any]]) -> list[Any]:
         return list(Parallel(n_jobs=self.n_jobs)(delayed(fn)(**a) for a in arg_dicts))
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -18,7 +20,7 @@ def _weighted_sum(*, vec: np.ndarray, weight: float, offset: int) -> float:
     return float(np.sum(vec) * weight + offset)
 
 
-def _arg_dicts() -> list[dict]:
+def _arg_dicts() -> list[dict[str, Any]]:
     return [
         {"vec": np.arange(5, dtype=np.float32), "weight": 2.0, "offset": 1},
         {"vec": np.ones(3, dtype=np.float32), "weight": 0.5, "offset": -2},
@@ -26,7 +28,7 @@ def _arg_dicts() -> list[dict]:
     ]
 
 
-def _expected(args: list[dict]) -> list[float]:
+def _expected(args: list[dict[str, Any]]) -> list[float]:
     return [_weighted_sum(**a) for a in args]
 
 

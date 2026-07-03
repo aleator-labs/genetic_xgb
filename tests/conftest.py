@@ -16,7 +16,7 @@ Split = namedtuple("Split", ["X_train", "y_train", "X_val", "y_val", "n_classes"
 RegSplit = namedtuple("RegSplit", ["X_train", "y_train", "X_val", "y_val"])
 
 
-def _split(X, y) -> Split:  # noqa: N803
+def _split(X: np.ndarray, y: np.ndarray) -> Split:  # noqa: N803
     X_train, X_val, y_train, y_val = train_test_split(  # noqa: N806
         X, y, test_size=0.3, random_state=SEED, stratify=y
     )

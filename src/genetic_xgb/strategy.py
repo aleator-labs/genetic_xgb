@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
+
+import numpy as np
 
 from genetic_xgb.feature_selection import crossover_masks, mutate_mask
 from genetic_xgb.member import PopulationMember
@@ -57,7 +59,7 @@ class GeneticStrategy:
         return self.rank(members)[: self.top_k]
 
     def crossover(
-        self, dominant: PopulationMember, recessive: PopulationMember, rng
+        self, dominant: PopulationMember, recessive: PopulationMember, rng: np.random.Generator
     ) -> dict[str, Any]:
         """Inherit each gene from the dominant parent with ``dominance_prob``."""
         return {
@@ -69,7 +71,7 @@ class GeneticStrategy:
             for name in self.space.names()
         }
 
-    def mutate(self, params: dict[str, Any], rng) -> dict[str, Any]:
+    def mutate(self, params: dict[str, Any], rng: np.random.Generator) -> dict[str, Any]:
         """Delegate mutation to the search space."""
         return self.space.mutate(
             params,
@@ -79,7 +81,9 @@ class GeneticStrategy:
             self.resample_prob,
         )
 
-    def evolve(self, members: list[PopulationMember], rng) -> list[PopulationMember]:
+    def evolve(
+        self, members: list[PopulationMember], rng: np.random.Generator
+    ) -> list[PopulationMember]:
         """Elitist exploit/explore step; same length and ids as the input."""
         survivors = self.select(members)
         survivor_ids = {m.id for m in survivors}
@@ -96,11 +100,21 @@ class GeneticStrategy:
             slot.inherit_from(dominant, recessive, child_params, feature_mask=child_mask)
         return sorted(members, key=lambda m: m.id)
 
-    def _breed_mask(self, dominant, recessive, rng):
+    def _breed_mask(
+        self,
+        dominant: PopulationMember,
+        recessive: PopulationMember,
+        rng: np.random.Generator,
+    ) -> np.ndarray | None:
         """Recombine + mutate the feature mask (None when feature selection is off)."""
         if not self.feature_selection:
             return None
+        # With feature_selection on, every member is created with a mask (fit's
+        # _initial_mask) and offspring always receive one, so the masks are never None.
         recombined = crossover_masks(
-            dominant.feature_mask, recessive.feature_mask, self.dominance_prob, rng
+            cast(np.ndarray, dominant.feature_mask),
+            cast(np.ndarray, recessive.feature_mask),
+            self.dominance_prob,
+            rng,
         )
         return mutate_mask(recombined, self.feature_mutation_rate, rng, self.min_features)

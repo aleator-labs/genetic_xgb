@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import xgboost as xgb
 from sklearn.datasets import make_classification
 
+from conftest import Split
 from genetic_xgb.metrics import resolve_metric
 from genetic_xgb.trainer import train_step
 
-BINARY_BASE = {
+BINARY_BASE: dict[str, Any] = {
     "objective": "binary:logistic",
     "tree_method": "hist",
     "max_bin": 256,
     "verbosity": 0,
     "nthread": 1,
 }
-MULTI_BASE = {
+MULTI_BASE: dict[str, Any] = {
     "objective": "multi:softprob",
     "num_class": 3,
     "tree_method": "hist",
@@ -24,10 +27,10 @@ MULTI_BASE = {
     "verbosity": 0,
     "nthread": 1,
 }
-HP = {"learning_rate": 0.1, "max_depth": 3}
+HP: dict[str, Any] = {"learning_rate": 0.1, "max_depth": 3}
 
 
-def test_cold_start_produces_valid_booster(binary_data):
+def test_cold_start_produces_valid_booster(binary_data: Split) -> None:
     out = train_step(
         booster_bytes=None,
         hyperparams=HP,
@@ -48,7 +51,7 @@ def test_cold_start_produces_valid_booster(binary_data):
     assert out["train_fitness"] is None
 
 
-def test_compute_train_fitness_returns_train_score(binary_data):
+def test_compute_train_fitness_returns_train_score(binary_data: Split) -> None:
     out = train_step(
         booster_bytes=None,
         hyperparams=HP,
@@ -70,7 +73,7 @@ def test_compute_train_fitness_returns_train_score(binary_data):
     assert proba.shape == (binary_data.X_val.shape[0],)
 
 
-def test_warm_start_increases_rounds_by_exactly_step_rounds(binary_data):
+def test_warm_start_increases_rounds_by_exactly_step_rounds(binary_data: Split) -> None:
     metric = resolve_metric("logloss")
     train = (binary_data.X_train, binary_data.y_train)
     val = (binary_data.X_val, binary_data.y_val)
@@ -98,7 +101,7 @@ def test_warm_start_increases_rounds_by_exactly_step_rounds(binary_data):
     assert second["n_rounds"] == first["n_rounds"] + 7
 
 
-def test_fitness_equals_independent_recompute_and_differs_from_train(binary_data):
+def test_fitness_equals_independent_recompute_and_differs_from_train(binary_data: Split) -> None:
     metric = resolve_metric("logloss")
     train = (binary_data.X_train, binary_data.y_train)
     val = (binary_data.X_val, binary_data.y_val)
@@ -124,7 +127,7 @@ def test_fitness_equals_independent_recompute_and_differs_from_train(binary_data
     assert out["fitness"] != train_score
 
 
-def test_multiclass_returns_2d_proba_and_scores(multiclass_data):
+def test_multiclass_returns_2d_proba_and_scores(multiclass_data: Split) -> None:
     metric = resolve_metric("logloss")
     out = train_step(
         booster_bytes=None,
@@ -144,7 +147,7 @@ def test_multiclass_returns_2d_proba_and_scores(multiclass_data):
     assert out["fitness"] == metric.score(multiclass_data.y_val, proba)
 
 
-def test_no_leakage_train_only_model_at_or_below_chance_on_adversarial_val():
+def test_no_leakage_train_only_model_at_or_below_chance_on_adversarial_val() -> None:
     # Train signal and validation labels are deliberately anti-correlated.
     features, y = make_classification(
         n_samples=400,
@@ -176,7 +179,7 @@ def test_no_leakage_train_only_model_at_or_below_chance_on_adversarial_val():
     assert out["fitness"] <= 0.55
 
 
-def test_early_stopping_caps_rounds_and_records_best_iteration(binary_data):
+def test_early_stopping_caps_rounds_and_records_best_iteration(binary_data: Split) -> None:
     # step_rounds is a large upper bound; validation plateaus so it stops well before it.
     out = train_step(
         booster_bytes=None,
@@ -193,7 +196,7 @@ def test_early_stopping_caps_rounds_and_records_best_iteration(binary_data):
     assert isinstance(out["best_iteration"], int)
 
 
-def test_early_stopping_with_explicit_eval_metric(binary_data):
+def test_early_stopping_with_explicit_eval_metric(binary_data: Split) -> None:
     # Passing eval_metric routes it into params; the run still produces a valid model.
     out = train_step(
         booster_bytes=None,
@@ -211,7 +214,7 @@ def test_early_stopping_with_explicit_eval_metric(binary_data):
     assert out["n_rounds"] >= 1
 
 
-def test_sample_weight_runs_and_returns_same_keys(binary_data):
+def test_sample_weight_runs_and_returns_same_keys(binary_data: Split) -> None:
     weights = np.full(binary_data.y_train.shape[0], 2.0, dtype=np.float32)
     out = train_step(
         booster_bytes=None,
@@ -234,11 +237,11 @@ def test_sample_weight_runs_and_returns_same_keys(binary_data):
     assert proba.shape == (binary_data.X_val.shape[0],)
 
 
-def test_skewed_sample_weight_changes_model_and_fitness(binary_data):
+def test_skewed_sample_weight_changes_model_and_fitness(binary_data: Split) -> None:
     metric = resolve_metric("logloss")
     train = (binary_data.X_train, binary_data.y_train)
     val = (binary_data.X_val, binary_data.y_val)
-    common = {
+    common: dict[str, Any] = {
         "booster_bytes": None,
         "hyperparams": HP,
         "train": train,
@@ -257,7 +260,7 @@ def test_skewed_sample_weight_changes_model_and_fitness(binary_data):
     assert weighted["fitness"] != unweighted["fitness"]
 
 
-def test_early_stopping_no_leakage_on_adversarial_val():
+def test_early_stopping_no_leakage_on_adversarial_val() -> None:
     # Same reversed-signal probe, now WITH early stopping: still at/below chance.
     features, y = make_classification(
         n_samples=400, n_features=10, n_informative=6, n_redundant=0, random_state=7

@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+import os
+from typing import Any, Self
 
 import numpy as np
 import xgboost as xgb
@@ -22,15 +23,24 @@ from genetic_xgb.executor import make_executor
 from genetic_xgb.feature_selection import sample_mask
 from genetic_xgb.history import History
 from genetic_xgb.member import PopulationMember
-from genetic_xgb.metrics import CLASSIFICATION_METRICS, REGRESSION_METRICS, resolve_metric
-from genetic_xgb.search_space import default_classification_space, default_regression_space
+from genetic_xgb.metrics import (
+    CLASSIFICATION_METRICS,
+    REGRESSION_METRICS,
+    MetricSpec,
+    resolve_metric,
+)
+from genetic_xgb.search_space import (
+    SearchSpace,
+    default_classification_space,
+    default_regression_space,
+)
 from genetic_xgb.strategy import GeneticStrategy
 from genetic_xgb.trainer import train_step
 
 _SEED_MOD = 2**31 - 1
 
 
-class BaseGeneticXGB(BaseEstimator):
+class BaseGeneticXGB(BaseEstimator):  # type: ignore[misc]
     """Shared genetic-algorithm engine. Subclasses fill in the task-specific hooks.
 
     Fitted attributes (set by :meth:`fit`):
@@ -54,7 +64,7 @@ class BaseGeneticXGB(BaseEstimator):
     """
 
     _default_metric: str = "logloss"
-    _metric_registry: dict = CLASSIFICATION_METRICS
+    _metric_registry: dict[str, MetricSpec] = CLASSIFICATION_METRICS
     _stratify_split: bool = True
 
     def __init__(
@@ -85,7 +95,7 @@ class BaseGeneticXGB(BaseEstimator):
         n_jobs: int = -1,
         executor: str = "joblib",
         random_state: int | None = None,
-        base_params: dict | None = None,
+        base_params: dict[str, Any] | None = None,
         greater_is_better: bool | None = None,
     ) -> None:
         self.population_size = population_size
@@ -165,7 +175,13 @@ class BaseGeneticXGB(BaseEstimator):
         if self.overfit_penalty < 0:
             raise ValueError(f"overfit_penalty must be >= 0; got {self.overfit_penalty}.")
 
-    def _validate_fit_inputs(self, X_train, y_train, X_val, y_val) -> None:  # noqa: N803
+    def _validate_fit_inputs(
+        self,
+        X_train: np.ndarray,  # noqa: N803
+        y_train: np.ndarray,
+        X_val: np.ndarray,  # noqa: N803
+        y_val: np.ndarray,
+    ) -> None:
         """Check X/y shape agreement and that targets are 1-D (see F5)."""
         if y_train.ndim != 1:
             raise ValueError(f"y_train must be 1-D; got {y_train.ndim} dimensions.")
@@ -182,7 +198,7 @@ class BaseGeneticXGB(BaseEstimator):
                 f"got {X_val.shape[0]} and {y_val.shape[0]}."
             )
 
-    def _validate_X(self, X, *, reset: bool):  # noqa: N802, N803
+    def _validate_X(self, X: Any, *, reset: bool) -> np.ndarray:  # noqa: N802, N803
         """Validate ``X`` via sklearn, coercing to float32.
 
         With ``reset=True`` (training) this records ``n_features_in_`` and, for a
@@ -200,9 +216,13 @@ class BaseGeneticXGB(BaseEstimator):
                 )
             X = X[list(self.feature_names_in_)]  # noqa: N806
         # ensure_all_finite=False keeps XGBoost's native missing-value (NaN) handling.
-        return validate_data(self, X, dtype=np.float32, ensure_all_finite=False, reset=reset)
+        return np.asarray(
+            validate_data(self, X, dtype=np.float32, ensure_all_finite=False, reset=reset)
+        )
 
-    def _encode_targets(self, y_train, y_val):  # noqa: N803
+    def _encode_targets(
+        self, y_train: np.ndarray, y_val: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Task-specific target preparation. Base engine passes targets through."""
         return y_train, y_val
 
@@ -215,13 +235,20 @@ class BaseGeneticXGB(BaseEstimator):
         return best >= self.target_fitness if greater else best <= self.target_fitness
 
     # --- task hooks (overridden by subclasses) ---
-    def _make_base_params(self, y_train) -> dict:  # noqa: N803
+    def _make_base_params(self, y_train: np.ndarray) -> dict[str, Any]:  # noqa: N803
         raise NotImplementedError
 
-    def _default_space(self):
+    def _default_space(self) -> SearchSpace:
         raise NotImplementedError
 
-    def _make_split(self, X, y, X_val, y_val, sample_weight):  # noqa: N803
+    def _make_split(
+        self,
+        X: Any,  # noqa: N803
+        y: Any,
+        X_val: Any,  # noqa: N803
+        y_val: Any,
+        sample_weight: Any,
+    ) -> tuple[Any, Any, Any, Any, Any]:
         """Resolve the train/validation split used for the genetic fitness signal.
 
         When ``X_val``/``y_val`` are supplied they are used directly. When omitted,
@@ -252,7 +279,15 @@ class BaseGeneticXGB(BaseEstimator):
         )
         return X_tr, y_tr, X_v, y_v, sw_tr
 
-    def fit(self, X, y, *, X_val=None, y_val=None, sample_weight=None):  # noqa: N803
+    def fit(
+        self,
+        X: Any,  # noqa: N803
+        y: Any,
+        *,
+        X_val: Any = None,  # noqa: N803
+        y_val: Any = None,
+        sample_weight: Any = None,
+    ) -> Self:
         self._validate_hyperparams()
         if (X_val is None) != (y_val is None):
             raise ValueError(
@@ -283,7 +318,7 @@ class BaseGeneticXGB(BaseEstimator):
 
         rng = np.random.default_rng(self.random_state)
 
-        def _initial_mask():
+        def _initial_mask() -> np.ndarray | None:
             if not self.feature_selection:
                 return None
             return sample_mask(self.n_features_in_, self.feature_init_prob, rng, self.min_features)
@@ -310,7 +345,7 @@ class BaseGeneticXGB(BaseEstimator):
         history = History()
         best_score: float | None = None
         best_bytes: bytes | None = None
-        best_params: dict | None = None
+        best_params: dict[str, Any] | None = None
         best_member: PopulationMember | None = None
 
         patience_best: float | None = None
@@ -363,7 +398,9 @@ class BaseGeneticXGB(BaseEstimator):
             history.record(generation, members)
 
             gen_best = strategy.rank(members)[0]
-            gen_score = gen_best.score
+            # rank() guarantees a member evaluated this generation is first; its score
+            # was just assigned above, so it is a float here.
+            gen_score = float(gen_best.score)  # type: ignore[arg-type]
             if np.isfinite(gen_score) and (
                 best_score is None or self._is_better(gen_score, best_score, greater)
             ):
@@ -373,24 +410,24 @@ class BaseGeneticXGB(BaseEstimator):
                 best_member = copy.deepcopy(gen_best)
 
             if patience_best is None:
-                patience_best = gen_best.score
+                patience_best = gen_score
                 no_improve = 0
             else:
-                gain = gen_best.score - patience_best if greater else patience_best - gen_best.score
+                gain = gen_score - patience_best if greater else patience_best - gen_score
                 if gain > self.min_delta:
-                    patience_best = gen_best.score
+                    patience_best = gen_score
                     no_improve = 0
                 else:
                     no_improve += 1
 
-            if self._meets_target(best_score, greater):
+            if best_score is not None and self._meets_target(best_score, greater):
                 break
             if self.patience is not None and no_improve >= self.patience:
                 break
             if generation < self.generations - 1:
                 members = strategy.evolve(members, rng)
 
-        if best_bytes is None:
+        if best_bytes is None or best_params is None or best_member is None:
             raise ValueError(
                 "No population member achieved a finite fitness value across any generation "
                 "(all scores were NaN or infinite). Check the metric and the training data."
@@ -415,17 +452,17 @@ class BaseGeneticXGB(BaseEstimator):
         booster.load_model(bytearray(self.best_booster_))
         return booster
 
-    def _select_features(self, X):  # noqa: N803
+    def _select_features(self, X: np.ndarray) -> np.ndarray:  # noqa: N803
         """Restrict validated ``X`` to the selected feature columns (no-op if disabled)."""
         mask = getattr(self, "feature_mask_", None)
         return X if mask is None else X[:, mask]
 
-    def _raw_predict(self, X):  # noqa: N803
+    def _raw_predict(self, X: Any) -> np.ndarray:  # noqa: N803
         check_is_fitted(self, "best_booster_")
         X = self._validate_X(X, reset=False)  # noqa: N806
-        return self._load_booster().predict(xgb.DMatrix(self._select_features(X)))
+        return np.asarray(self._load_booster().predict(xgb.DMatrix(self._select_features(X))))
 
-    def get_support(self, indices: bool = False):
+    def get_support(self, indices: bool = False) -> np.ndarray:
         """Return the selected-feature mask (or selected indices if ``indices=True``).
 
         Without feature selection, all features are selected.
@@ -456,11 +493,11 @@ class BaseGeneticXGB(BaseEstimator):
             importances /= total
         return importances
 
-    def _encode_y_for_refit(self, y):
+    def _encode_y_for_refit(self, y: Any) -> np.ndarray:
         """Prepare targets for :meth:`refit_full`. Base passes through (regression)."""
         return np.asarray(y)
 
-    def refit_full(self, X, y, sample_weight=None):  # noqa: N803
+    def refit_full(self, X: Any, y: Any, sample_weight: Any = None) -> Self:  # noqa: N803
         """Train one XGBoost model on all of ``(X, y)`` from ``best_params_`` and deploy it.
 
         This is the conventional "refit the winning configuration on all data" step
@@ -488,12 +525,12 @@ class BaseGeneticXGB(BaseEstimator):
         check_is_fitted(self, "best_booster_")
         return self._load_booster()
 
-    def apply(self, X):  # noqa: N803
+    def apply(self, X: Any) -> np.ndarray:  # noqa: N803
         """Return the leaf index each sample falls into, per tree (XGBoost ``pred_leaf``)."""
         x_sel = self._select_features(self._validate_X(X, reset=False))
-        return self._load_booster().predict(xgb.DMatrix(x_sel), pred_leaf=True)
+        return np.asarray(self._load_booster().predict(xgb.DMatrix(x_sel), pred_leaf=True))
 
-    def save_model(self, fname) -> None:
+    def save_model(self, fname: str | os.PathLike[str]) -> None:
         """Save the fitted booster in XGBoost's native format (JSON/UBJ by extension).
 
         This writes only the booster (portable to other XGBoost tooling/languages); the
@@ -515,7 +552,7 @@ class BaseGeneticXGB(BaseEstimator):
     def _restore_after_load(self, booster: xgb.Booster) -> None:
         """Hook to restore task-specific fitted state after :meth:`load_model`."""
 
-    def load_model(self, fname):
+    def load_model(self, fname: str | os.PathLike[str]) -> Self:
         """Load a native XGBoost booster into this estimator for prediction.
 
         Restores ``best_booster_`` and ``n_features_in_`` (and, for the classifier,
@@ -530,7 +567,7 @@ class BaseGeneticXGB(BaseEstimator):
         return self
 
 
-class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
+class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):  # type: ignore[misc]
     """Evolve a population of XGBoost classifiers via a genetic algorithm.
 
     Class labels are label-encoded internally: arbitrary integer or string labels
@@ -546,7 +583,9 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
     _default_metric = "logloss"
     _metric_registry = CLASSIFICATION_METRICS
 
-    def _encode_targets(self, y_train, y_val):  # noqa: N803
+    def _encode_targets(
+        self, y_train: np.ndarray, y_val: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Label-encode targets so arbitrary int/string labels train correctly.
 
         Stores ``self.classes_`` (original labels, sorted) and returns the encoded
@@ -554,8 +593,8 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
         present in training, or if a validation label was never seen in training.
         """
         encoder = LabelEncoder()
-        y_train_enc = encoder.fit_transform(y_train)
-        self.classes_ = encoder.classes_
+        y_train_enc = np.asarray(encoder.fit_transform(y_train))
+        self.classes_ = np.asarray(encoder.classes_)
         if self.classes_.size < 2:
             raise ValueError(
                 f"Classification requires at least 2 classes in y_train; got {self.classes_.size}."
@@ -566,13 +605,13 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
                 f"Validation labels {sorted(unseen)} are not present in the training labels "
                 f"{self.classes_.tolist()}."
             )
-        y_val_enc = encoder.transform(y_val)
+        y_val_enc = np.asarray(encoder.transform(y_val))
         return y_train_enc, y_val_enc
 
-    def _make_base_params(self, y_train):  # noqa: N803
+    def _make_base_params(self, y_train: np.ndarray) -> dict[str, Any]:  # noqa: N803
         n_classes = int(np.unique(y_train).size)
         self.n_classes_ = n_classes
-        base = {"tree_method": "hist", "max_bin": 256, "verbosity": 0, "nthread": 1}
+        base: dict[str, Any] = {"tree_method": "hist", "max_bin": 256, "verbosity": 0, "nthread": 1}
         if n_classes == 2:
             base["objective"] = "binary:logistic"
         else:
@@ -580,34 +619,34 @@ class GeneticXGBClassifier(ClassifierMixin, BaseGeneticXGB):
             base["num_class"] = n_classes
         return base
 
-    def _default_space(self):
+    def _default_space(self) -> SearchSpace:
         return default_classification_space()
 
-    def predict_proba(self, X):  # noqa: N803
+    def predict_proba(self, X: Any) -> np.ndarray:  # noqa: N803
         proba = self._raw_predict(X)
         if proba.ndim == 1:
             return np.column_stack([1.0 - proba, proba])
         return proba
 
-    def _encode_y_for_refit(self, y):
+    def _encode_y_for_refit(self, y: Any) -> np.ndarray:
         """Encode refit targets with the classes learned during the search."""
         encoder = LabelEncoder()
         encoder.classes_ = self.classes_
-        return encoder.transform(np.asarray(y))
+        return np.asarray(encoder.transform(np.asarray(y)))
 
-    def _restore_after_load(self, booster):
+    def _restore_after_load(self, booster: xgb.Booster) -> None:
         """Recover class metadata from a natively loaded booster (labels become 0..k-1)."""
         config = json.loads(booster.save_config())
         num_class = int(config["learner"]["learner_model_param"]["num_class"])
         self.n_classes_ = num_class if num_class > 0 else 2
         self.classes_ = np.arange(self.n_classes_)
 
-    def predict(self, X):  # noqa: N803
+    def predict(self, X: Any) -> np.ndarray:  # noqa: N803
         encoded = self.predict_proba(X).argmax(axis=1)
-        return self.classes_[encoded]
+        return np.asarray(self.classes_[encoded])
 
 
-class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):
+class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):  # type: ignore[misc]
     """Evolve a population of XGBoost regressors via a genetic algorithm.
 
     Targets are used as-is (no label encoding). See :class:`BaseGeneticXGB` for
@@ -620,7 +659,7 @@ class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):
     _metric_registry = REGRESSION_METRICS
     _stratify_split = False
 
-    def _make_base_params(self, y_train):  # noqa: N803
+    def _make_base_params(self, y_train: np.ndarray) -> dict[str, Any]:  # noqa: N803
         return {
             "tree_method": "hist",
             "max_bin": 256,
@@ -629,8 +668,8 @@ class GeneticXGBRegressor(RegressorMixin, BaseGeneticXGB):
             "objective": "reg:squarederror",
         }
 
-    def _default_space(self):
+    def _default_space(self) -> SearchSpace:
         return default_regression_space()
 
-    def predict(self, X):  # noqa: N803
+    def predict(self, X: Any) -> np.ndarray:  # noqa: N803
         return self._raw_predict(X)
