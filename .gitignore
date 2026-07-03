@@ -17,3 +17,6 @@ htmlcov/
 
 # Scratch multi-agent workflow scripts (saved ones live in .claude/workflows/)
 .pbt_*_workflow.mjs
+
+# CI-generated lockfile export for pip-audit
+requirements.audit.txt
